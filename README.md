@@ -45,7 +45,7 @@ calculating every dimension. The script:
 
 - **Python 3.8+** (no external packages required!)
 - Optional: [OpenSCAD](https://openscad.org/) to view/edit `.scad` files
-- Optional: Slicer software (Cura, PrusaSlicer, Bambustudio, etc.) for 3D printing
+- Optional: Slicer software (Cura, PrusaSlicer, bambuStudio, etc.) for 3D printing
 
 ## Usage
 
