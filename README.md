@@ -38,7 +38,9 @@ calculating every dimension. The script:
 3. **Generates 3D models**:
    - `{projectname}_box.scad` - OpenSCAD file ready for rendering and export
    - `{projectname}_box.stl` - Ready-to-print STL file
-4. **Adds labels** - Auto-generated compartment dimensions for easy identification
+4. **Adds labels** - Auto-generated pixel labels per compartment:
+   - Small compartment number
+   - Small requested/derived size label (rounded integer format, e.g. `32x24`)
 5. **Saves settings** - Stores all parameters in `.boxGenerator.{projectname}.json` for reuse
 
 ## Requirements
@@ -84,6 +86,7 @@ The script guides you through:
    - Layout attempts
    - Attempts per cluster
 6. **Free space** - Divide remaining space into smaller compartments?
+   - Leftover strips are automatically distributed across neighboring fill compartments to avoid unusable gaps
 
 ### Advanced Options
 
@@ -103,7 +106,8 @@ After initial configuration, the script automatically remembers your project. Pr
 - Rounded outer shell
 - Compartments defined as cavities (subtracted)
 - Internal divider walls
-- Labeled compartment groups (% comments)
+- Directional wall reference comments per wall (`Rnn`, `Bnn`, `Lnn`, `Onn`)
+- Small dual labels inside each compartment (number + size)
 
 **Customization options in OpenSCAD:**
 - Modify `$fn` for quality/smoothness
@@ -228,10 +232,24 @@ Type 3: 100x100, 2 cells, cluster 1, back/random
 ### OpenSCAD Generation
 - **Outer shell** - Rounded rectangle, linearly extruded
 - **Main cavity** - Large rectangle subtracting interior
-- **Internal walls** - Rectangles placed between compartments
-- **Labels** - Generated pixel fonts with dimensions
+- **Internal walls** - Rectangles placed between compartments, annotated with directional cavity refs (`R/B/L/O`)
+- **Labels** - Generated pixel fonts with two small lines per compartment (number + rounded size)
+
+### Label Format
+- Compartment number: sequential `1..N`
+- Size line: rounded integer format `XxY` (example: `32.5x24.0` is shown as `32x24`)
+- Labels use a small fixed pixel size and only shrink further when a compartment is too small
 
 ## Advanced Configuration
+
+### Reproducible Example Project
+The repository includes a ready-to-run example profile:
+
+`.boxGenerator.example_gap_absorb_demo.json`
+
+Select the project `example_gap_absorb_demo` in the interactive menu to reproduce a layout where a tiny strip between two requested compartments is absorbed.
+
+The CLI now reports this explicitly in an **Absorbed tiny gaps between requested cavities** section, including axis, involved cavity indices, gap size, and growth per cavity.
 
 ### Free Space Compartments
 Want to divide unused space into smaller compartments? Specify a "free cell size":
@@ -239,6 +257,12 @@ Want to divide unused space into smaller compartments? Specify a "free cell size
 Free space size: 20x20
 ```
 This fills all remaining open space with 20×20 cells.
+
+If a leftover strip cannot form a useful extra compartment, the script automatically spreads that strip over adjacent free-space compartments.
+
+The same rule applies to strips trapped between two facing requested compartments: neighboring compartments absorb that strip automatically while keeping divider logic intact.
+
+Narrow free-space strips are now absorbed aggressively into adjacent compartments (including edge-adjacent cases), so thin sliver compartments are minimized.
 
 ### Adjust Wall Height
 Default: same height as box. Change for shallower walls:

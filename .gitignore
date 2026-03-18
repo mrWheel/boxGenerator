@@ -1,3 +1,6 @@
 *.json
+!.boxGenerator.example_gap_absorb_demo.json
 *.scad
 *.stl
+*__pycache__
+*.venv

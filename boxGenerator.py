@@ -93,6 +93,16 @@ class PackingProgress:
   total_groups: int
 
 
+@dataclass
+class GapAdjustment:
+  axis: str
+  first_cavity_index: int
+  second_cavity_index: int
+  gap_size: float
+  first_growth: float
+  second_growth: float
+
+
 # ------------------------------------------------------------
 # Parsing helpers
 # ------------------------------------------------------------
@@ -850,8 +860,17 @@ def choose_anchor_position(
   item_h: float,
   rng: random.Random,
   item: ClusterItem,
-  domain: Rect
+  domain: Rect,
+  grid_step: float,
+  eps: float = 1e-9
 ) -> Tuple[float, float]:
+  def snap_to_grid(value: float, origin: float, step: float) -> float:
+    if step <= eps:
+      return value
+    snapped = origin + round((value - origin) / step) * step
+    # Avoid tiny floating artifacts in downstream subtraction.
+    return round(snapped, 6)
+
   dx = space.w - item_w
   dy = space.h - item_h
 
@@ -875,6 +894,8 @@ def choose_anchor_position(
     min_x = space.x
     max_x = space.x + dx
     x = min(max(target_x, min_x), max_x)
+    x = min(max(snap_to_grid(x, domain.x, grid_step), min_x), max_x)
+    y = min(max(snap_to_grid(y, domain.y, grid_step), min_y), max_y)
 
     return x, y
 
@@ -888,8 +909,16 @@ def choose_anchor_position(
   ]
 
   offset_x, offset_y = rng.choice(anchors)
+  x = space.x + offset_x
+  y = space.y + offset_y
+  min_x = space.x
+  max_x = space.x + dx
+  min_y = space.y
+  max_y = space.y + dy
+  x = min(max(snap_to_grid(x, domain.x, grid_step), min_x), max_x)
+  y = min(max(snap_to_grid(y, domain.y, grid_step), min_y), max_y)
 
-  return space.x + offset_x, space.y + offset_y
+  return x, y
 
 
 def try_place_cluster(
@@ -921,7 +950,8 @@ def try_place_cluster(
           footprint_h,
           rng,
           item,
-          domain
+          domain,
+          separator_thickness
         )
 
         placed = PlacedCluster(
@@ -939,10 +969,10 @@ def try_place_cluster(
         )
 
         blocked = Rect(
-          placed.x - separator_thickness,
-          placed.y - separator_thickness,
-          placed.w + 2.0 * separator_thickness,
-          placed.h + 2.0 * separator_thickness
+            placed.x - separator_thickness / 2.0,
+            placed.y - separator_thickness / 2.0,
+            placed.w + separator_thickness,
+            placed.h + separator_thickness
         )
 
         blocked_clipped = clip_rect_to_domain(blocked, domain)
@@ -978,13 +1008,8 @@ def pack_clusters_random(
   per_item_attempts: int,
   show_progress: bool = True
 ) -> Tuple[List[PlacedCluster], List[Rect], Rect, List[ClusterItem]]:
-  edge_margin = inner_wall_thickness / 2.0
-  domain = Rect(
-    edge_margin,
-    edge_margin,
-    inner_length - inner_wall_thickness,
-    inner_width - inner_wall_thickness
-  )
+  _ = inner_wall_thickness
+  domain = Rect(0.0, 0.0, inner_length, inner_width)
 
   if domain.w <= 0 or domain.h <= 0:
     raise RuntimeError("Inner box size is too small for the requested inner wall thickness.")
@@ -1106,16 +1131,176 @@ def cluster_to_cavities(cluster: PlacedCluster, inner_wall_thickness: float) -> 
   return cavities
 
 
+def overlap_length(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
+  return min(end_a, end_b) - max(start_a, start_b)
+
+
+def distribute_growth_between_neighbors(
+  total_growth: float,
+  first_limit: float,
+  second_limit: float,
+  eps: float = 1e-9
+) -> Optional[Tuple[float, float]]:
+  if total_growth <= eps:
+    return (0.0, 0.0)
+
+  first_growth = min(first_limit, total_growth / 2.0)
+  second_growth = min(second_limit, total_growth / 2.0)
+  remaining = total_growth - first_growth - second_growth
+
+  if remaining > eps:
+    extra_first = min(first_limit - first_growth, remaining)
+    first_growth += extra_first
+    remaining -= extra_first
+
+  if remaining > eps:
+    extra_second = min(second_limit - second_growth, remaining)
+    second_growth += extra_second
+    remaining -= extra_second
+
+  if remaining > eps:
+    return None
+
+  return (first_growth, second_growth)
+
+
+def should_consume_gap_for_fill(
+  gap_size: float,
+  fill_requirement: Optional[float],
+  eps: float = 1e-9
+) -> bool:
+  if gap_size <= eps:
+    return False
+
+  if fill_requirement is None:
+    return True
+
+  return gap_size + eps < fill_requirement
+
+
+def has_substantial_overlap(span_a: float, span_b: float, overlap: float, eps: float = 1e-9) -> bool:
+  return overlap + eps >= min(span_a, span_b)
+
+
+def adjust_requested_cavities_for_small_gaps(
+  requested_cavities: List[Rect],
+  free_rects: List[Rect],
+  inner_wall_thickness: float,
+  eps: float = 1e-9
+) -> Tuple[List[Rect], List[Rect], List[GapAdjustment]]:
+  adjusted_cavities = [Rect(cavity.x, cavity.y, cavity.w, cavity.h) for cavity in requested_cavities]
+  remaining_free: List[Rect] = []
+  adjustments: List[GapAdjustment] = []
+
+  for free_rect in free_rects:
+    left_index: Optional[int] = None
+    right_index: Optional[int] = None
+    bottom_index: Optional[int] = None
+    top_index: Optional[int] = None
+
+    for index, cavity in enumerate(adjusted_cavities):
+      cavity_right = cavity.x + cavity.w
+      cavity_top = cavity.y + cavity.h
+      overlap_y = overlap_length(cavity.y, cavity_top, free_rect.y, free_rect.y + free_rect.h)
+      overlap_x = overlap_length(cavity.x, cavity_right, free_rect.x, free_rect.x + free_rect.w)
+
+      if 0.0 <= free_rect.x - cavity_right <= inner_wall_thickness + eps and has_substantial_overlap(cavity.h, free_rect.h, overlap_y, eps):
+        left_index = index if left_index is None else -1
+
+      if 0.0 <= cavity.x - (free_rect.x + free_rect.w) <= inner_wall_thickness + eps and has_substantial_overlap(cavity.h, free_rect.h, overlap_y, eps):
+        right_index = index if right_index is None else -1
+
+      if 0.0 <= free_rect.y - cavity_top <= inner_wall_thickness + eps and has_substantial_overlap(cavity.w, free_rect.w, overlap_x, eps):
+        bottom_index = index if bottom_index is None else -1
+
+      if 0.0 <= cavity.y - (free_rect.y + free_rect.h) <= inner_wall_thickness + eps and has_substantial_overlap(cavity.w, free_rect.w, overlap_x, eps):
+        top_index = index if top_index is None else -1
+
+    consumed = False
+
+    if (
+      left_index is not None and left_index >= 0 and
+      right_index is not None and right_index >= 0 and
+      left_index != right_index
+    ):
+      left_cavity = adjusted_cavities[left_index]
+      right_cavity = adjusted_cavities[right_index]
+      total_gap = right_cavity.x - (left_cavity.x + left_cavity.w)
+      growth_total = max(0.0, total_gap - inner_wall_thickness)
+      left_limit = growth_total
+      right_limit = growth_total
+      growth_split = distribute_growth_between_neighbors(growth_total, left_limit, right_limit, eps)
+
+      if growth_split is not None:
+        left_growth, right_growth = growth_split
+        left_cavity.w += left_growth
+        right_cavity.x -= right_growth
+        right_cavity.w += right_growth
+        adjustments.append(
+          GapAdjustment(
+            axis="x",
+            first_cavity_index=left_index + 1,
+            second_cavity_index=right_index + 1,
+            gap_size=total_gap,
+            first_growth=left_growth,
+            second_growth=right_growth
+          )
+        )
+        consumed = True
+
+    elif (
+      bottom_index is not None and bottom_index >= 0 and
+      top_index is not None and top_index >= 0 and
+      bottom_index != top_index
+    ):
+      bottom_cavity = adjusted_cavities[bottom_index]
+      top_cavity = adjusted_cavities[top_index]
+      total_gap = top_cavity.y - (bottom_cavity.y + bottom_cavity.h)
+      growth_total = max(0.0, total_gap - inner_wall_thickness)
+      bottom_limit = growth_total
+      top_limit = growth_total
+      growth_split = distribute_growth_between_neighbors(growth_total, bottom_limit, top_limit, eps)
+
+      if growth_split is not None:
+        bottom_growth, top_growth = growth_split
+        bottom_cavity.h += bottom_growth
+        top_cavity.y -= top_growth
+        top_cavity.h += top_growth
+        adjustments.append(
+          GapAdjustment(
+            axis="y",
+            first_cavity_index=bottom_index + 1,
+            second_cavity_index=top_index + 1,
+            gap_size=total_gap,
+            first_growth=bottom_growth,
+            second_growth=top_growth
+          )
+        )
+        consumed = True
+
+    if not consumed:
+      remaining_free.append(free_rect)
+
+  return adjusted_cavities, remaining_free, adjustments
+
+
 def build_all_cavities(
   placed_clusters: List[PlacedCluster],
   free_rects: List[Rect],
   inner_wall_thickness: float,
-  free_cell_size: Optional[Tuple[float, float]]
-) -> Tuple[List[Rect], List[Rect]]:
+  free_cell_size: Optional[Tuple[float, float]],
+  domain: Rect
+) -> Tuple[List[Rect], List[Rect], List[GapAdjustment]]:
   requested_cavities: List[Rect] = []
 
   for cluster in placed_clusters:
     requested_cavities.extend(cluster_to_cavities(cluster, inner_wall_thickness))
+
+  requested_cavities, free_rects, adjustments = adjust_requested_cavities_for_small_gaps(
+    requested_cavities,
+    free_rects,
+    inner_wall_thickness
+  )
 
   if free_cell_size is not None:
     merged_free_rects = merge_adjacent_rectangles(free_rects)
@@ -1129,7 +1314,219 @@ def build_all_cavities(
   else:
     free_cavities = merge_adjacent_rectangles(free_rects)
 
-  return requested_cavities, free_cavities
+  requested_cavities, free_cavities = absorb_narrow_free_cavities(
+    requested_cavities,
+    free_cavities,
+    domain,
+    inner_wall_thickness
+  )
+  free_cavities = normalize_free_rects(free_cavities)
+
+  return requested_cavities, free_cavities, adjustments
+
+
+def build_compartment_number_labels(cavity_count: int) -> List[str]:
+  return [str(index) for index in range(1, cavity_count + 1)]
+
+
+def absorb_narrow_free_cavities(
+  requested_cavities: List[Rect],
+  free_cavities: List[Rect],
+  domain: Rect,
+  inner_wall_thickness: float,
+  eps: float = 1e-9
+) -> Tuple[List[Rect], List[Rect]]:
+  if not free_cavities:
+    return requested_cavities, free_cavities
+
+  max_x = domain.x + domain.w
+  max_y = domain.y + domain.h
+  requested_count = len(requested_cavities)
+  cavities: List[Rect] = [Rect(c.x, c.y, c.w, c.h) for c in requested_cavities + free_cavities]
+  free_indices = set(range(requested_count, len(cavities)))
+  removed_indices: set[int] = set()
+
+  def find_neighbors_for_strip(strip_index: int, axis: str) -> Tuple[Optional[int], Optional[int]]:
+    strip = cavities[strip_index]
+    strip_right = strip.x + strip.w
+    strip_top = strip.y + strip.h
+    first_neighbor: Optional[int] = None
+    second_neighbor: Optional[int] = None
+    best_first_overlap = -1.0
+    best_second_overlap = -1.0
+    distance_limit = max(
+      inner_wall_thickness * 2.5,
+      min(strip.w, strip.h) * 1.75 + inner_wall_thickness
+    ) + eps
+
+    for idx, candidate in enumerate(cavities):
+      if idx == strip_index or idx in removed_indices:
+        continue
+
+      candidate_right = candidate.x + candidate.w
+      candidate_top = candidate.y + candidate.h
+
+      overlap_y = overlap_length(candidate.y, candidate_top, strip.y, strip_top)
+      overlap_x = overlap_length(candidate.x, candidate_right, strip.x, strip_right)
+
+      if axis == "x":
+        if 0.0 <= strip.x - candidate_right <= distance_limit and overlap_y > eps:
+          if overlap_y > best_first_overlap:
+            best_first_overlap = overlap_y
+            first_neighbor = idx
+        if 0.0 <= candidate.x - strip_right <= distance_limit and overlap_y > eps:
+          if overlap_y > best_second_overlap:
+            best_second_overlap = overlap_y
+            second_neighbor = idx
+      else:
+        if 0.0 <= strip.y - candidate_top <= distance_limit and overlap_x > eps:
+          if overlap_x > best_first_overlap:
+            best_first_overlap = overlap_x
+            first_neighbor = idx
+        if 0.0 <= candidate.y - strip_top <= distance_limit and overlap_x > eps:
+          if overlap_x > best_second_overlap:
+            best_second_overlap = overlap_x
+            second_neighbor = idx
+
+    return first_neighbor, second_neighbor
+
+  def is_narrow_strip(rect: Rect) -> bool:
+    short_side = min(rect.w, rect.h)
+    long_side = max(rect.w, rect.h)
+    return short_side <= max(2.0 * inner_wall_thickness, 0.45 * long_side)
+
+  ordered_free_indices = sorted(free_indices, key=lambda idx: min(cavities[idx].w, cavities[idx].h))
+
+  for strip_index in ordered_free_indices:
+    if strip_index in removed_indices:
+      continue
+
+    strip = cavities[strip_index]
+    if not is_narrow_strip(strip):
+      continue
+
+    x_axis_strip = strip.w <= strip.h
+    axis = "x" if x_axis_strip else "y"
+    first_neighbor, second_neighbor = find_neighbors_for_strip(strip_index, axis)
+    consumed = False
+
+    def try_consume_with_axis(
+      active_axis: str,
+      left_or_bottom_neighbor: Optional[int],
+      right_or_top_neighbor: Optional[int]
+    ) -> bool:
+      if left_or_bottom_neighbor is not None and right_or_top_neighbor is not None and left_or_bottom_neighbor != right_or_top_neighbor:
+        first = cavities[left_or_bottom_neighbor]
+        second = cavities[right_or_top_neighbor]
+
+        if active_axis == "x":
+          total_gap = second.x - (first.x + first.w)
+          growth_total = max(0.0, total_gap - inner_wall_thickness)
+          growth_split = distribute_growth_between_neighbors(growth_total, growth_total, growth_total, eps)
+          if growth_split is not None:
+            first_growth, second_growth = growth_split
+            first.w += first_growth
+            second.x -= second_growth
+            second.w += second_growth
+            return True
+        else:
+          total_gap = second.y - (first.y + first.h)
+          growth_total = max(0.0, total_gap - inner_wall_thickness)
+          growth_split = distribute_growth_between_neighbors(growth_total, growth_total, growth_total, eps)
+          if growth_split is not None:
+            first_growth, second_growth = growth_split
+            first.h += first_growth
+            second.y -= second_growth
+            second.h += second_growth
+            return True
+
+      strip_right = strip.x + strip.w
+      strip_top = strip.y + strip.h
+      touches_left = strip.x <= domain.x + eps
+      touches_right = strip_right >= max_x - eps
+      touches_bottom = strip.y <= domain.y + eps
+      touches_top = strip_top >= max_y - eps
+
+      if active_axis == "x":
+        if touches_left and right_or_top_neighbor is not None:
+          right_neighbor = cavities[right_or_top_neighbor]
+          growth = right_neighbor.x - domain.x
+          if growth > eps:
+            right_neighbor.x = domain.x
+            right_neighbor.w += growth
+            return True
+        elif touches_right and left_or_bottom_neighbor is not None:
+          left_neighbor = cavities[left_or_bottom_neighbor]
+          growth = max_x - (left_neighbor.x + left_neighbor.w)
+          if growth > eps:
+            left_neighbor.w += growth
+            return True
+        elif left_or_bottom_neighbor is not None:
+          left_neighbor = cavities[left_or_bottom_neighbor]
+          growth = strip_right - left_neighbor.x - left_neighbor.w
+          if growth > eps:
+            left_neighbor.w += growth
+            return True
+        elif right_or_top_neighbor is not None:
+          right_neighbor = cavities[right_or_top_neighbor]
+          growth = right_neighbor.x - strip.x
+          if growth > eps:
+            right_neighbor.x = strip.x
+            right_neighbor.w += growth
+            return True
+      else:
+        if touches_bottom and right_or_top_neighbor is not None:
+          top_neighbor = cavities[right_or_top_neighbor]
+          growth = top_neighbor.y - domain.y
+          if growth > eps:
+            top_neighbor.y = domain.y
+            top_neighbor.h += growth
+            return True
+        elif touches_top and left_or_bottom_neighbor is not None:
+          bottom_neighbor = cavities[left_or_bottom_neighbor]
+          growth = max_y - (bottom_neighbor.y + bottom_neighbor.h)
+          if growth > eps:
+            bottom_neighbor.h += growth
+            return True
+        elif left_or_bottom_neighbor is not None:
+          bottom_neighbor = cavities[left_or_bottom_neighbor]
+          growth = strip_top - bottom_neighbor.y - bottom_neighbor.h
+          if growth > eps:
+            bottom_neighbor.h += growth
+            return True
+        elif right_or_top_neighbor is not None:
+          top_neighbor = cavities[right_or_top_neighbor]
+          growth = top_neighbor.y - strip.y
+          if growth > eps:
+            top_neighbor.y = strip.y
+            top_neighbor.h += growth
+            return True
+
+      return False
+
+    consumed = try_consume_with_axis(axis, first_neighbor, second_neighbor)
+    if not consumed:
+      alt_axis = "y" if axis == "x" else "x"
+      alt_first, alt_second = find_neighbors_for_strip(strip_index, alt_axis)
+      consumed = try_consume_with_axis(alt_axis, alt_first, alt_second)
+
+    if consumed:
+      removed_indices.add(strip_index)
+
+  updated_requested: List[Rect] = []
+  updated_free: List[Rect] = []
+
+  for idx, cavity in enumerate(cavities):
+    if idx in removed_indices:
+      continue
+    if cavity.w <= eps or cavity.h <= eps:
+      continue
+    if idx < requested_count:
+      updated_requested.append(cavity)
+    else:
+      updated_free.append(cavity)
+
+  return updated_requested, normalize_free_rects(updated_free)
 
 
 def build_wall_rects(domain: Rect, cavities: List[Rect]) -> List[Rect]:
@@ -1146,27 +1543,14 @@ def build_wall_rects(domain: Rect, cavities: List[Rect]) -> List[Rect]:
 
 def to_centerline_cavities(
   cavities: List[Rect],
+  domain: Rect,
   wall_thickness: float,
   eps: float = 1e-9
 ) -> List[Rect]:
-  """
-  Convert nominal compartment rectangles to centerline-based cavities.
-  Per axis, total cavity reduction is wall_thickness / 2, centered around midpoint.
-  """
-  if wall_thickness <= eps:
-    return cavities[:]
-
-  inset = wall_thickness / 4.0
-  adjusted: List[Rect] = []
-
-  for cavity in cavities:
-    new_w = cavity.w - 2.0 * inset
-    new_h = cavity.h - 2.0 * inset
-    if new_w <= eps or new_h <= eps:
-      continue
-    adjusted.append(Rect(cavity.x + inset, cavity.y + inset, new_w, new_h))
-
-  return adjusted
+  _ = domain
+  _ = wall_thickness
+  _ = eps
+  return cavities[:]
 
 
 def merge_1d_intervals(intervals: List[Tuple[float, float]], eps: float = 1e-9) -> List[Tuple[float, float]]:
@@ -1298,7 +1682,126 @@ def ensure_cavity_closure(
       if missing is not None:
         completed.append(missing)
 
-  return normalize_free_rects(completed)
+  return [rect for rect in completed if rect.w > eps and rect.h > eps]
+
+
+def enforce_nominal_wall_thickness(
+  wall_rects: List[Rect],
+  wall_thickness: float,
+  domain: Rect,
+  eps: float = 1e-9
+) -> List[Rect]:
+  if wall_thickness <= eps:
+    return wall_rects
+
+  adjusted: List[Rect] = []
+  tol = max(eps, wall_thickness * 0.35)
+
+  for rect in wall_rects:
+    if rect.w <= eps or rect.h <= eps:
+      continue
+
+    new_x = rect.x
+    new_y = rect.y
+    new_w = rect.w
+    new_h = rect.h
+
+    if rect.w <= wall_thickness + tol and rect.h > wall_thickness + tol:
+      new_w = wall_thickness
+    elif rect.h <= wall_thickness + tol and rect.w > wall_thickness + tol:
+      new_h = wall_thickness
+    elif rect.w > wall_thickness + tol and rect.h > wall_thickness + tol:
+      if rect.h >= rect.w:
+        center_x = rect.x + rect.w / 2.0
+        new_x = center_x - wall_thickness / 2.0
+        new_w = wall_thickness
+      else:
+        center_y = rect.y + rect.h / 2.0
+        new_y = center_y - wall_thickness / 2.0
+        new_h = wall_thickness
+
+    clipped = clip_rect_to_domain_strict(Rect(new_x, new_y, new_w, new_h), domain, eps)
+    if clipped is not None:
+      adjusted.append(clipped)
+
+  return [rect for rect in adjusted if rect.w > eps and rect.h > eps]
+
+
+def strengthen_wall_junction_overlaps(
+  wall_rects: List[Rect],
+  wall_thickness: float,
+  domain: Rect,
+  eps: float = 1e-9
+) -> List[Rect]:
+  if wall_thickness <= eps or not wall_rects:
+    return wall_rects
+
+  source = [Rect(rect.x, rect.y, rect.w, rect.h) for rect in wall_rects]
+  strengthened: List[Rect] = []
+  tol = max(eps, wall_thickness * 0.35)
+
+  def is_vertical(rect: Rect) -> bool:
+    return rect.h > rect.w + tol or abs(rect.w - wall_thickness) <= tol
+
+  def ranges_overlap_or_touch(a0: float, a1: float, b0: float, b1: float) -> bool:
+    return min(a1, b1) - max(a0, b0) >= -tol
+
+  for wall in source:
+    x0 = wall.x
+    y0 = wall.y
+    x1 = wall.x + wall.w
+    y1 = wall.y + wall.h
+
+    if is_vertical(wall):
+      extend_down = False
+      extend_up = False
+
+      for other in source:
+        if other is wall or is_vertical(other):
+          continue
+        oy0 = other.y
+        oy1 = other.y + other.h
+        ox0 = other.x
+        ox1 = other.x + other.w
+
+        if ranges_overlap_or_touch(x0, x1, ox0, ox1):
+          if abs(y0 - oy1) <= tol and y0 > domain.y + eps:
+            extend_down = True
+          if abs(y1 - oy0) <= tol and y1 < domain.y + domain.h - eps:
+            extend_up = True
+
+      if extend_down:
+        y0 -= wall_thickness
+      if extend_up:
+        y1 += wall_thickness
+    else:
+      extend_left = False
+      extend_right = False
+
+      for other in source:
+        if other is wall or not is_vertical(other):
+          continue
+        oy0 = other.y
+        oy1 = other.y + other.h
+        ox0 = other.x
+        ox1 = other.x + other.w
+
+        if ranges_overlap_or_touch(y0, y1, oy0, oy1):
+          if abs(x0 - ox1) <= tol and x0 > domain.x + eps:
+            extend_left = True
+          if abs(x1 - ox0) <= tol and x1 < domain.x + domain.w - eps:
+            extend_right = True
+
+      if extend_left:
+        x0 -= wall_thickness
+      if extend_right:
+        x1 += wall_thickness
+
+    clipped = clip_rect_to_domain_strict(Rect(x0, y0, x1 - x0, y1 - y0), domain, eps)
+    if clipped is not None:
+      strengthened.append(clipped)
+
+  return [rect for rect in strengthened if rect.w > eps and rect.h > eps]
 
 
 def extend_walls_for_overlap(
@@ -1532,58 +2035,88 @@ def split_free_rects_into_cells(
   eps: float = 1e-9
 ) -> List[Rect]:
   cells: List[Rect] = []
-  step_x = cell_w + inner_wall_thickness
-  step_y = cell_h + inner_wall_thickness
 
-  if step_x <= eps or step_y <= eps:
+  if cell_w <= eps or cell_h <= eps:
     return free_rects
 
   for free_rect in free_rects:
     columns = 0
     rows = 0
+    forced_single_column = False
+    forced_single_row = False
 
-    x = free_rect.x
-    while x + cell_w <= free_rect.x + free_rect.w + eps:
+    used_width = 0.0
+    while True:
+      next_width = columns * (cell_w + inner_wall_thickness) + cell_w
+      if next_width > free_rect.w + eps:
+        break
       columns += 1
-      x += step_x
+      used_width = next_width
 
-    y = free_rect.y
-    while y + cell_h <= free_rect.y + free_rect.h + eps:
+    used_height = 0.0
+    while True:
+      next_height = rows * (cell_h + inner_wall_thickness) + cell_h
+      if next_height > free_rect.h + eps:
+        break
       rows += 1
-      y += step_y
+      used_height = next_height
 
-    if columns == 0 or rows == 0:
-      cells.append(free_rect)
-      continue
+    if columns == 0:
+      columns = 1
+      forced_single_column = True
+      used_width = free_rect.w
+
+    if rows == 0:
+      rows = 1
+      forced_single_row = True
+      used_height = free_rect.h
+
+    base_cell_w = free_rect.w if forced_single_column else cell_w
+    base_cell_h = free_rect.h if forced_single_row else cell_h
+
+    remainder_x = max(0.0, free_rect.w - used_width)
+    remainder_y = max(0.0, free_rect.h - used_height)
+    extra_w = remainder_x / columns
+    extra_h = remainder_y / rows
+    remainder_x = 0.0
+    remainder_y = 0.0
+
+    actual_cell_w = base_cell_w + extra_w
+    actual_cell_h = base_cell_h + extra_h
+    step_x = actual_cell_w + (inner_wall_thickness if columns > 1 else 0.0)
+    step_y = actual_cell_h + (inner_wall_thickness if rows > 1 else 0.0)
 
     for row_index in range(rows):
       y = free_rect.y + row_index * step_y
       for column_index in range(columns):
         x = free_rect.x + column_index * step_x
-        cells.append(Rect(x, y, cell_w, cell_h))
+        cells.append(Rect(x, y, actual_cell_w, actual_cell_h))
 
-    remainder_x = free_rect.x + columns * step_x
-    remainder_y = free_rect.y + rows * step_y
-    right_remainder_w = (free_rect.x + free_rect.w) - remainder_x
-    bottom_remainder_h = (free_rect.y + free_rect.h) - remainder_y
+    used_span_x = columns * actual_cell_w + max(0, columns - 1) * inner_wall_thickness
+    used_span_y = rows * actual_cell_h + max(0, rows - 1) * inner_wall_thickness
+    remainder_x_start = free_rect.x + used_span_x
+    remainder_y_start = free_rect.y + used_span_y
+    right_remainder_w = (free_rect.x + free_rect.w) - remainder_x_start
+    bottom_remainder_h = (free_rect.y + free_rect.h) - remainder_y_start
 
     if right_remainder_w > eps:
       for row_index in range(rows):
         y = free_rect.y + row_index * step_y
-        cells.append(Rect(remainder_x, y, right_remainder_w, cell_h))
+        cells.append(Rect(remainder_x_start, y, right_remainder_w, actual_cell_h))
 
     if bottom_remainder_h > eps:
       for column_index in range(columns):
         x = free_rect.x + column_index * step_x
-        cells.append(Rect(x, remainder_y, cell_w, bottom_remainder_h))
+        cells.append(Rect(x, remainder_y_start, actual_cell_w, bottom_remainder_h))
 
     if right_remainder_w > eps and bottom_remainder_h > eps:
-      cells.append(Rect(remainder_x, remainder_y, right_remainder_w, bottom_remainder_h))
+      cells.append(Rect(remainder_x_start, remainder_y_start, right_remainder_w, bottom_remainder_h))
 
   if not cells:
     return free_rects
 
-  return [rect for rect in cells if rect.w > eps and rect.h > eps]
+  filtered_cells = [rect for rect in cells if rect.w > eps and rect.h > eps]
+  return normalize_free_rects(filtered_cells)
 
 
 PIXEL_FONT: dict[str, List[str]] = {
@@ -1675,7 +2208,9 @@ PIXEL_FONT: dict[str, List[str]] = {
 
 
 def format_compartment_size_label(width: float, height: float) -> str:
-  return f"{width:g}x{height:g}"
+  rounded_w = int(round(width))
+  rounded_h = int(round(height))
+  return f"{rounded_w}x{rounded_h}"
 
 
 def get_text_pixel_dimensions(text: str) -> Tuple[int, int]:
@@ -1697,37 +2232,24 @@ def get_text_pixel_dimensions(text: str) -> Tuple[int, int]:
 
 def build_compartment_label_boxes(
   cavities: List[Rect],
-  bottom_thickness: float
+  bottom_thickness: float,
+  compartment_label_texts: Optional[List[str]] = None,
+  secondary_label_texts: Optional[List[str]] = None
 ) -> List[SolidBox]:
   boxes: List[SolidBox] = []
 
-  for cavity in cavities:
-    label_text = format_compartment_size_label(cavity.w, cavity.h)
-    text_units_w, text_units_h = get_text_pixel_dimensions(label_text)
-
-    if text_units_w <= 0 or text_units_h <= 0:
-      continue
-
-    margin = max(0.6, min(cavity.w, cavity.h) * 0.08)
-    available_w = cavity.w - 2.0 * margin
-    available_h = cavity.h - 2.0 * margin
-
-    if available_w <= 0 or available_h <= 0:
-      continue
-
-    pixel_size = min(available_w / text_units_w, available_h / text_units_h)
-    if pixel_size < 0.8:
-      continue
-
-    gap_size = pixel_size
-    text_w = text_units_w * pixel_size
-    text_h = text_units_h * pixel_size
-    start_x = cavity.x + (cavity.w - text_w) / 2.0
-    start_y = cavity.y + (cavity.h - text_h) / 2.0
+  def append_text_boxes(
+    text: str,
+    start_x: float,
+    start_y: float,
+    pixel_size: float,
+    label_height: float
+  ) -> None:
     cursor_x = start_x
-    label_height = min(0.8, max(0.4, bottom_thickness * 0.35))
+    gap_size = pixel_size
+    text_units_h = 5
 
-    for char_index, char in enumerate(label_text):
+    for char_index, char in enumerate(text):
       pattern = PIXEL_FONT.get(char)
       if pattern is None:
         continue
@@ -1750,8 +2272,54 @@ def build_compartment_label_boxes(
           )
 
       cursor_x += pattern_w * pixel_size
-      if char_index < len(label_text) - 1:
+      if char_index < len(text) - 1:
         cursor_x += gap_size
+
+  for index, cavity in enumerate(cavities):
+    if compartment_label_texts is not None and index < len(compartment_label_texts):
+      primary_text = compartment_label_texts[index]
+    else:
+      primary_text = format_compartment_size_label(cavity.w, cavity.h)
+
+    secondary_text: Optional[str] = None
+    if secondary_label_texts is not None and index < len(secondary_label_texts):
+      secondary_text = secondary_label_texts[index]
+
+    lines = [line for line in [primary_text, secondary_text] if line]
+    if not lines:
+      continue
+
+    line_dimensions: List[Tuple[int, int]] = [get_text_pixel_dimensions(line) for line in lines]
+    if any(units_w <= 0 or units_h <= 0 for units_w, units_h in line_dimensions):
+      continue
+
+    widest_units = max(units_w for units_w, _ in line_dimensions)
+    line_height_units = 5
+    line_gap_units = 2 if len(lines) > 1 else 0
+    total_height_units = len(lines) * line_height_units + (len(lines) - 1) * line_gap_units
+
+    margin = max(0.5, min(cavity.w, cavity.h) * 0.06)
+    available_w = cavity.w - 2.0 * margin
+    available_h = cavity.h - 2.0 * margin
+
+    if available_w <= 0 or available_h <= 0:
+      continue
+
+    preferred_pixel_size = 0.55
+    max_fit_pixel_size = min(available_w / widest_units, available_h / total_height_units)
+    pixel_size = min(preferred_pixel_size, max_fit_pixel_size)
+    if pixel_size < 0.30:
+      continue
+
+    label_height = min(0.65, max(0.3, bottom_thickness * 0.28))
+    total_height = total_height_units * pixel_size
+    current_y = cavity.y + (cavity.h - total_height) / 2.0
+
+    for line, (line_units_w, _) in zip(lines, line_dimensions):
+      line_w = line_units_w * pixel_size
+      start_x = cavity.x + (cavity.w - line_w) / 2.0
+      append_text_boxes(line, start_x, current_y, pixel_size, label_height)
+      current_y += (line_height_units + line_gap_units) * pixel_size
 
   return boxes
 
@@ -1759,6 +2327,63 @@ def build_compartment_label_boxes(
 # ------------------------------------------------------------
 # OpenSCAD generation
 # ------------------------------------------------------------
+
+def wall_direction_refs(
+  wall_rect: Rect,
+  cavities: List[Rect],
+  inner_wall_thickness: float
+) -> List[str]:
+  right_ids: set[int] = set()
+  top_ids: set[int] = set()
+  left_ids: set[int] = set()
+  bottom_ids: set[int] = set()
+  tol = max(1e-6, inner_wall_thickness * 0.26)
+  is_vertical = wall_rect.h >= wall_rect.w
+
+  def overlap_1d(start_a: float, end_a: float, start_b: float, end_b: float) -> float:
+    return min(end_a, end_b) - max(start_a, start_b)
+
+  for idx, cavity in enumerate(cavities, start=1):
+    cx0 = cavity.x
+    cx1 = cavity.x + cavity.w
+    cy0 = cavity.y
+    cy1 = cavity.y + cavity.h
+
+    wx0 = wall_rect.x
+    wx1 = wall_rect.x + wall_rect.w
+    wy0 = wall_rect.y
+    wy1 = wall_rect.y + wall_rect.h
+
+    if is_vertical:
+      if overlap_1d(wy0, wy1, cy0, cy1) <= tol:
+        continue
+      touches_left_face = abs(cx1 - wx0) <= tol
+      touches_right_face = abs(cx0 - wx1) <= tol
+      # Cavity touches left face of vertical wall: this is cavity's right boundary.
+      if touches_left_face:
+        right_ids.add(idx)
+      # Cavity touches right face of vertical wall: this is cavity's left boundary.
+      if touches_right_face:
+        left_ids.add(idx)
+    else:
+      if overlap_1d(wx0, wx1, cx0, cx1) <= tol:
+        continue
+      touches_bottom_face = abs(cy1 - wy0) <= tol
+      touches_top_face = abs(cy0 - wy1) <= tol
+      # Cavity touches bottom face of horizontal wall: this is cavity's top boundary.
+      if touches_bottom_face:
+        top_ids.add(idx)
+      # Cavity touches top face of horizontal wall: this is cavity's bottom boundary.
+      if touches_top_face:
+        bottom_ids.add(idx)
+
+  refs: List[str] = []
+  refs.extend(f"R{comp_id:02d}" for comp_id in sorted(right_ids))
+  refs.extend(f"B{comp_id:02d}" for comp_id in sorted(top_ids))
+  refs.extend(f"L{comp_id:02d}" for comp_id in sorted(left_ids))
+  refs.extend(f"O{comp_id:02d}" for comp_id in sorted(bottom_ids))
+  return refs
+
 
 def make_scad(
   inner_length: float,
@@ -1789,6 +2414,7 @@ def make_scad(
   )
 
   lines: List[str] = []
+  all_cavities = requested_cavities + free_cavities
 
   lines.append("// Generated by Python")
   lines.append("// The requested box dimensions are the inner dimensions in mm")
@@ -1822,16 +2448,18 @@ def make_scad(
   lines.append("")
   lines.append("// Requested cavities")
   for index, cavity in enumerate(requested_cavities, start=1):
+    compartment_id = index
     lines.append(
-      f"// requested_{index}: x={cavity.x:.3f}, y={cavity.y:.3f}, "
+      f"// C{compartment_id:02d} requested_{index}: x={cavity.x:.3f}, y={cavity.y:.3f}, "
       f"size={cavity.w:.3f}x{cavity.h:.3f}"
     )
 
   lines.append("")
   lines.append("// Remaining free cavities")
   for index, cavity in enumerate(free_cavities, start=1):
+    compartment_id = len(requested_cavities) + index
     lines.append(
-      f"// free_{index}: x={cavity.x:.3f}, y={cavity.y:.3f}, "
+      f"// C{compartment_id:02d} free_{index}: x={cavity.x:.3f}, y={cavity.y:.3f}, "
       f"size={cavity.w:.3f}x{cavity.h:.3f}"
     )
 
@@ -1911,8 +2539,12 @@ def make_scad(
   lines.append("    union()")
   lines.append("    {")
   for wall_rect in wall_rects:
+    refs = wall_direction_refs(wall_rect, all_cavities, inner_wall_thickness)
+    if not refs:
+      continue
+    wall_comment = " // " + ",".join(refs)
     lines.append(
-      f"      wall({wall_rect.x:.3f}, {wall_rect.y:.3f}, {wall_rect.w:.3f}, {wall_rect.h:.3f});"
+      f"      wall({wall_rect.x:.3f}, {wall_rect.y:.3f}, {wall_rect.w:.3f}, {wall_rect.h:.3f});{wall_comment}"
     )
   for label_box in label_boxes:
     lines.append(
@@ -2169,6 +2801,24 @@ def print_cavity_summary(requested_cavities: List[Rect], free_cavities: List[Rec
       )
 
 
+def print_gap_adjustments(adjustments: List[GapAdjustment]) -> None:
+  print("")
+  print("Absorbed tiny gaps between requested cavities:")
+
+  if not adjustments:
+    print("  None")
+    return
+
+  for index, adjustment in enumerate(adjustments, start=1):
+    print(
+      f"  adjustment_{index:02d} "
+      f"axis={adjustment.axis} "
+      f"between=requested_{adjustment.first_cavity_index:02d}/requested_{adjustment.second_cavity_index:02d} "
+      f"gap={adjustment.gap_size:.3f} "
+      f"growth=+{adjustment.first_growth:.3f}/+{adjustment.second_growth:.3f}"
+    )
+
+
 # ------------------------------------------------------------
 # Main
 # ------------------------------------------------------------
@@ -2299,23 +2949,28 @@ def main() -> None:
       resize_applied = True
 
   if resize_applied:
-    edge_margin = inner_wall_thickness / 2.0
-    domain = Rect(
-      edge_margin,
-      edge_margin,
-      inner_length - inner_wall_thickness,
-      inner_width - inner_wall_thickness
-    )
+    domain = Rect(0.0, 0.0, inner_length, inner_width)
     free_rects = clip_free_rects_to_domain(free_rects, domain)
 
-  requested_cavities, free_cavities = build_all_cavities(
+  requested_cavities, free_cavities, gap_adjustments = build_all_cavities(
     placed_clusters=placed_clusters,
     free_rects=free_rects,
     inner_wall_thickness=inner_wall_thickness,
-    free_cell_size=free_cell_size
+    free_cell_size=free_cell_size,
+    domain=domain
   )
+  compartment_label_texts = build_compartment_number_labels(len(requested_cavities) + len(free_cavities))
+  requested_size_texts: List[str] = []
+  for cluster in placed_clusters:
+    for cavity in cluster_to_cavities(cluster, inner_wall_thickness):
+      requested_size_texts.append(format_compartment_size_label(cavity.w, cavity.h))
+  secondary_label_texts: List[str] = requested_size_texts + [
+    format_compartment_size_label(cavity.w, cavity.h)
+    for cavity in free_cavities
+  ]
   wall_cavities = to_centerline_cavities(
     requested_cavities + free_cavities,
+    domain,
     inner_wall_thickness
   )
   wall_domain = Rect(0.0, 0.0, inner_length, inner_width)
@@ -2326,8 +2981,35 @@ def main() -> None:
     wall_rects,
     inner_wall_thickness
   )
+  wall_rects = enforce_nominal_wall_thickness(
+    wall_rects,
+    inner_wall_thickness,
+    wall_domain
+  )
+  wall_rects = strengthen_wall_junction_overlaps(
+    wall_rects,
+    inner_wall_thickness,
+    wall_domain
+  )
+  wall_rects = ensure_cavity_closure(
+    wall_domain,
+    wall_cavities,
+    wall_rects,
+    inner_wall_thickness
+  )
+  all_cavities = requested_cavities + free_cavities
+  wall_rects = [
+    wall_rect
+    for wall_rect in wall_rects
+    if wall_direction_refs(wall_rect, all_cavities, inner_wall_thickness)
+  ]
 
-  label_boxes = build_compartment_label_boxes(requested_cavities + free_cavities, bottom_thickness)
+  label_boxes = build_compartment_label_boxes(
+    requested_cavities + free_cavities,
+    bottom_thickness,
+    compartment_label_texts=compartment_label_texts,
+    secondary_label_texts=secondary_label_texts
+  )
 
   scad_text = make_scad(
     inner_length=inner_length,
@@ -2366,6 +3048,7 @@ def main() -> None:
 
   print_cluster_summary(placed_clusters)
   print_cavity_summary(requested_cavities, free_cavities)
+  print_gap_adjustments(gap_adjustments)
 
   print("")
   print(f"OpenSCAD file written: {output_path}")
