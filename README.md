@@ -25,7 +25,7 @@ happens—electrically, mechanically, chemically, spiritually, or otherwise.
 Also, full disclosure: I am not a qualified software engineer. I provide no guarantees, no warranties, 
 and absolutely no assurance that this software is correct, safe, or suitable for any purpose whatsoever.
 
-## What Does This Script Do?
+## What Do These Scripts Do?
 
 **boxGenerator.py** is designed for makers who want to create functional storage boxes without manually 
 calculating every dimension. The script:
@@ -47,6 +47,23 @@ calculating every dimension. The script:
    - `+` when a compartment grew, `-` when it shrank, `+-` when both happened on different axes
 5. **Saves settings** - Stores all parameters in `.boxGenerator.{projectname}.json` for reuse
 
+**gridLayoutGenerator.py** is a grid-first variant for quick layouts with fixed grid cells. It:
+
+1. **Asks for grid parameters**:
+   - `gridSize` in mm
+   - complete outer box size as `LxWxH`
+   - `outerWall`, `innerWall`, `bottom thickness`, `inner wall height`
+2. **Asks for compartment requirements** repeatedly:
+   - grid size in cells (for example `1x1`, `2x3`, `4x2`)
+   - count per type
+3. **Fills the grid first** without wall calculations, then applies wall geometry afterward
+4. **Reports fit problems** when requested compartments do not fully fit
+5. **Fills remaining cells** with `1x1` leftovers if everything else fits
+6. **Generates output**:
+   - `{projectname}.scad`
+   - `{projectname}.stl`
+   - `.gridLayout.{projectname}.json`
+
 ## Requirements
 
 - **Python 3.8+** (no external packages required!)
@@ -66,6 +83,34 @@ Or explicitly with Python:
 ```bash
 python3 boxGenerator.py
 ```
+
+Grid-based generator:
+
+```bash
+./gridLayoutGenerator.py
+```
+
+Or:
+
+```bash
+python3 gridLayoutGenerator.py
+```
+
+### Quick Start (boxGenerator example profile)
+
+Use the included example profile file:
+
+`.boxGenerator._boxGeneratorTest.json`
+
+Then run:
+
+```bash
+./boxGenerator.py
+```
+
+And choose project:
+
+`_boxGeneratorTest`
 
 ### Interactive Menu
 
@@ -107,7 +152,7 @@ After initial configuration, the script automatically remembers your project. Pr
 
 ## Output Files
 
-### {projectname}_box.scad
+### {projectname}.scad
  Complete OpenSCAD model with:
 - Rounded outer shell
 - Compartments generated individually with `makeCompartment(nr, posX, posY, sizeX, sizeY)`
@@ -119,7 +164,7 @@ After initial configuration, the script automatically remembers your project. Pr
 - Add features (label holes, snap tabs, etc.)
 - Render to STL via OpenSCAD GUI
 
-### {projectname}_box.stl
+### {projectname}.stl
 
 Direct 3D-printable binary STL file.
 **Note:** Corner rounding is exact in OpenSCAD but simplified in STL (rectangular). For ultimate quality: render the `.scad` file in OpenSCAD, then re-export to STL.
@@ -252,9 +297,9 @@ Type 3: 100x100, 2 cells, cluster 1, back/random
 ### Reproducible Example Project
 The repository includes a ready-to-run example profile:
 
-`.boxGenerator.example_gap_absorb_demo.json`
+`.boxGenerator._boxGeneratorTest.json`
 
-Select the project `example_gap_absorb_demo` in the interactive menu to reproduce a layout where a tiny strip between two requested compartments is absorbed.
+Select the project `_boxGeneratorTest` in the interactive menu to reproduce a layout where a tiny strip between two requested compartments is absorbed.
 
 The CLI now reports this explicitly in an **Absorbed tiny gaps between requested cavities** section, including axis, involved cavity indices, gap size, and growth per cavity.
 
@@ -285,7 +330,7 @@ Inner wall height: 40 (while box is 80 mm tall)
    - File → Export as STL
 
 2. **Direct STL route:**
-   - Use `{projectname}_box.stl` directly
+   - Use `{projectname}.stl` directly
    - Note: corners are simplified
 
 3. **Slicer preparation:**
