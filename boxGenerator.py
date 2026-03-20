@@ -993,75 +993,92 @@ def try_place_cluster(
   separator_thickness: float,
   domain: Rect
 ) -> Optional[Tuple[PlacedCluster, List[Rect]]]:
-  candidates: List[Tuple[PlacedCluster, List[Rect], int]] = []
+  all_footprints = get_cluster_footprints(item, separator_thickness)
+  exact_footprints: List[Tuple[str, float, float, float, float, float, float]] = []
+  shrunk_footprints: List[Tuple[str, float, float, float, float, float, float]] = []
 
-  for _ in range(per_item_attempts):
-    shuffled_spaces = free_rects[:]
-    rng.shuffle(shuffled_spaces)
+  for footprint in all_footprints:
+    _, _, _, cell_w, cell_h, requested_w, requested_h = footprint
+    if abs(cell_w - requested_w) <= 1e-9 and abs(cell_h - requested_h) <= 1e-9:
+      exact_footprints.append(footprint)
+    else:
+      shrunk_footprints.append(footprint)
 
-    for space in shuffled_spaces:
-      footprints = get_cluster_footprints(item, separator_thickness)
-      shuffled_footprints = footprints[:]
-      rng.shuffle(shuffled_footprints)
+  footprint_passes = [exact_footprints]
+  if shrunk_footprints:
+    footprint_passes.append(shrunk_footprints)
 
-      for orientation, footprint_w, footprint_h, cell_w, cell_h, requested_w, requested_h in shuffled_footprints:
-        if footprint_w > space.w or footprint_h > space.h:
-          continue
+  for footprint_pool in footprint_passes:
+    if not footprint_pool:
+      continue
 
-        pos_x, pos_y = choose_anchor_position(
-          space,
-          footprint_w,
-          footprint_h,
-          rng,
-          item,
-          domain,
-          separator_thickness
-        )
+    candidates: List[Tuple[PlacedCluster, List[Rect], int]] = []
 
-        placed = PlacedCluster(
-          x=pos_x,
-          y=pos_y,
-          w=footprint_w,
-          h=footprint_h,
-          cell_w=cell_w,
-          cell_h=cell_h,
-          requested_cell_w=requested_w,
-          requested_cell_h=requested_h,
-          cells=item.cells,
-          orientation=orientation,
-          label=item.label,
-          placement_mode=item.placement_mode,
-          lateral_mode=item.lateral_mode
-        )
+    for _ in range(per_item_attempts):
+      shuffled_spaces = free_rects[:]
+      rng.shuffle(shuffled_spaces)
 
-        blocked = Rect(
-            placed.x,
-            placed.y,
-            placed.w,
-            placed.h
-        )
+      for space in shuffled_spaces:
+        shuffled_footprints = footprint_pool[:]
+        rng.shuffle(shuffled_footprints)
 
-        blocked_clipped = clip_rect_to_domain(blocked, domain)
-        if blocked_clipped is None:
-          continue
+        for orientation, footprint_w, footprint_h, cell_w, cell_h, requested_w, requested_h in shuffled_footprints:
+          if footprint_w > space.w or footprint_h > space.h:
+            continue
 
-        updated_free: List[Rect] = []
-        for existing in free_rects:
-          updated_free.extend(subtract_rect(existing, blocked_clipped))
+          pos_x, pos_y = choose_anchor_position(
+            space,
+            footprint_w,
+            footprint_h,
+            rng,
+            item,
+            domain,
+            separator_thickness
+          )
 
-        updated_free = normalize_free_rects(updated_free)
-        fragmentation_score = len(updated_free)
+          placed = PlacedCluster(
+            x=pos_x,
+            y=pos_y,
+            w=footprint_w,
+            h=footprint_h,
+            cell_w=cell_w,
+            cell_h=cell_h,
+            requested_cell_w=requested_w,
+            requested_cell_h=requested_h,
+            cells=item.cells,
+            orientation=orientation,
+            label=item.label,
+            placement_mode=item.placement_mode,
+            lateral_mode=item.lateral_mode
+          )
 
-        candidates.append((placed, updated_free, fragmentation_score))
+          blocked = Rect(
+              placed.x,
+              placed.y,
+              placed.w,
+              placed.h
+          )
 
-  if not candidates:
-    return None
+          blocked_clipped = clip_rect_to_domain(blocked, domain)
+          if blocked_clipped is None:
+            continue
 
-  candidates.sort(key=lambda entry: entry[2])
-  best_band = candidates[:max(1, min(8, len(candidates)))]
-  chosen_placed, chosen_free, _ = rng.choice(best_band)
+          updated_free: List[Rect] = []
+          for existing in free_rects:
+            updated_free.extend(subtract_rect(existing, blocked_clipped))
 
-  return chosen_placed, chosen_free
+          updated_free = normalize_free_rects(updated_free)
+          fragmentation_score = len(updated_free)
+
+          candidates.append((placed, updated_free, fragmentation_score))
+
+    if candidates:
+      candidates.sort(key=lambda entry: entry[2])
+      best_band = candidates[:max(1, min(8, len(candidates)))]
+      chosen_placed, chosen_free, _ = rng.choice(best_band)
+      return chosen_placed, chosen_free
+
+  return None
 
 
 def pack_clusters_random(
@@ -1087,7 +1104,33 @@ def pack_clusters_random(
   )
   total_cells = sum(item.cells for item in items_sorted)
 
+  def layout_score(
+    placed: List[PlacedCluster],
+    free: List[Rect],
+    attempt: int,
+    eps: float = 1e-9
+  ) -> Tuple[int, float, int, float, int]:
+    shrink_axis_count = 0
+    shrink_ratio_total = 0.0
+
+    for cluster in placed:
+      if cluster.cell_w + eps < cluster.requested_cell_w:
+        shrink_axis_count += 1
+        shrink_ratio_total += (cluster.requested_cell_w - cluster.cell_w) / cluster.requested_cell_w
+      if cluster.cell_h + eps < cluster.requested_cell_h:
+        shrink_axis_count += 1
+        shrink_ratio_total += (cluster.requested_cell_h - cluster.cell_h) / cluster.requested_cell_h
+
+    return (
+      shrink_axis_count,
+      shrink_ratio_total,
+      len(free),
+      sum(rect_area(rect) for rect in free),
+      attempt
+    )
+
   best_result: Optional[Tuple[List[PlacedCluster], List[Rect], int, int]] = None
+  best_no_shrink_result: Optional[Tuple[List[PlacedCluster], List[Rect], int, int]] = None
   progress_step = max(1, layout_attempts // 12)
 
   for attempt_index in range(layout_attempts):
@@ -1120,20 +1163,24 @@ def pack_clusters_random(
     current_missing_items = [item for item in items_sorted if item.label not in {cluster.label for cluster in placed_clusters}]
 
     if success:
-      score = (
-        len(free_rects),
-        sum(rect_area(rect) for rect in free_rects),
-        attempt_index
-      )
+      score = layout_score(placed_clusters, free_rects, attempt_index)
+
+      if score[0] == 0:
+        if best_no_shrink_result is None:
+          best_no_shrink_result = (placed_clusters, free_rects, placed_count, attempt_index)
+        else:
+          best_no_shrink_score = layout_score(
+            best_no_shrink_result[0],
+            best_no_shrink_result[1],
+            best_no_shrink_result[3]
+          )
+          if score < best_no_shrink_score:
+            best_no_shrink_result = (placed_clusters, free_rects, placed_count, attempt_index)
 
       if best_result is None:
         best_result = (placed_clusters, free_rects, placed_count, attempt_index)
       else:
-        current_score = (
-          len(best_result[1]),
-          sum(rect_area(rect) for rect in best_result[1]),
-          best_result[3]
-        )
+        current_score = layout_score(best_result[0], best_result[1], best_result[3])
 
         if score < current_score:
           best_result = (placed_clusters, free_rects, placed_count, attempt_index)
@@ -1153,23 +1200,11 @@ def pack_clusters_random(
         f"current missing compartments {format_missing_compartment_indices(current_missing_items)}"
       )
 
-    # Stop early as soon as all requested compartments have been placed.
-    if success and placed_count >= total_cells:
-      if show_progress and not (
-        attempt_index == 0 or
-        (attempt_index + 1) % progress_step == 0 or
-        attempt_index + 1 == layout_attempts
-      ):
-        current_best = best_result[2] if best_result is not None else 0
-        print(
-          f"Packing progress: attempt {attempt_index + 1}/{layout_attempts}, "
-          f"best placed compartments {current_best}/{total_cells}, "
-          f"current missing compartments {format_missing_compartment_indices(current_missing_items)}"
-        )
-      break
-
   if best_result is None:
     raise RuntimeError("No valid layout could be generated.")
+
+  if best_no_shrink_result is not None:
+    best_result = best_no_shrink_result
 
   placed_clusters, free_rects, placed_count, _ = best_result
   placed_labels = {cluster.label for cluster in placed_clusters}
@@ -1596,18 +1631,19 @@ def build_compartment_placements(
 ) -> Tuple[List[CompartmentPlacement], List[CompartmentPlacement]]:
   adjusted_requested = [Rect(cavity.x, cavity.y, cavity.w, cavity.h) for cavity in requested_cavities]
   adjusted_free = [Rect(cavity.x, cavity.y, cavity.w, cavity.h) for cavity in free_cavities]
+  eps = 1e-9
 
   for cavity in adjusted_requested:
     grew = True
     while grew:
       grew = False
       for free_index, free_rect in enumerate(adjusted_free):
-        same_height = abs(free_rect.y - cavity.y) <= 1e-9 and abs(free_rect.h - cavity.h) <= 1e-9
+        same_height = abs(free_rect.y - cavity.y) <= eps and abs(free_rect.h - cavity.h) <= eps
         if not same_height:
           continue
 
-        grows_left = abs((free_rect.x + free_rect.w) - cavity.x) <= 1e-9
-        grows_right = abs((cavity.x + cavity.w) - free_rect.x) <= 1e-9
+        grows_left = abs((free_rect.x + free_rect.w) - cavity.x) <= eps
+        grows_right = abs((cavity.x + cavity.w) - free_rect.x) <= eps
         if not grows_left and not grows_right:
           continue
 
@@ -1624,7 +1660,7 @@ def build_compartment_placements(
             continue
           overlap_x = overlap_length(candidate.x, candidate.x + candidate.w, other.x, other.x + other.w)
           overlap_y = overlap_length(candidate.y, candidate.y + candidate.h, other.y, other.y + other.h)
-          if overlap_x > 1e-9 and overlap_y > 1e-9:
+          if overlap_x > eps and overlap_y > eps:
             blocked = True
             break
 
@@ -1636,6 +1672,83 @@ def build_compartment_placements(
         del adjusted_free[free_index]
         grew = True
         break
+
+  max_x = 0.0
+  for rect in adjusted_requested + adjusted_free:
+    max_x = max(max_x, rect.x + rect.w)
+
+  for cavity in adjusted_requested:
+    grew = True
+    while grew:
+      grew = False
+      cavity_right = cavity.x + cavity.w
+
+      for free_index, free_rect in enumerate(adjusted_free):
+        if abs(free_rect.x - cavity_right) > eps:
+          continue
+
+        free_covers_height = free_rect.y <= cavity.y + eps and free_rect.y + free_rect.h >= cavity.y + cavity.h - eps
+        if not free_covers_height:
+          continue
+
+        candidate = Rect(cavity.x, cavity.y, cavity.w + free_rect.w, cavity.h)
+
+        blocked = False
+        for other in adjusted_requested:
+          if other is cavity:
+            continue
+          overlap_x = overlap_length(candidate.x, candidate.x + candidate.w, other.x, other.x + other.w)
+          overlap_y = overlap_length(candidate.y, candidate.y + candidate.h, other.y, other.y + other.h)
+          if overlap_x > eps and overlap_y > eps:
+            blocked = True
+            break
+
+        if blocked:
+          continue
+
+        cavity.w = candidate.w
+
+        consumed_slice = Rect(free_rect.x, cavity.y, free_rect.w, cavity.h)
+        replacement = subtract_rect(free_rect, consumed_slice, eps)
+        del adjusted_free[free_index]
+        for part in replacement:
+          if part.w > eps and part.h > eps:
+            adjusted_free.append(part)
+
+        adjusted_free = normalize_free_rects(adjusted_free, eps)
+
+        if cavity.x + cavity.w >= max_x - eps:
+          break
+
+        grew = True
+        break
+
+  for cavity in adjusted_requested:
+    current_right = cavity.x + cavity.w
+    if current_right >= max_x - eps:
+      continue
+
+    candidate = Rect(cavity.x, cavity.y, max_x - cavity.x, cavity.h)
+    blocked = False
+    for other in adjusted_requested:
+      if other is cavity:
+        continue
+      overlap_x = overlap_length(candidate.x, candidate.x + candidate.w, other.x, other.x + other.w)
+      overlap_y = overlap_length(candidate.y, candidate.y + candidate.h, other.y, other.y + other.h)
+      if overlap_x > eps and overlap_y > eps:
+        blocked = True
+        break
+
+    if blocked:
+      continue
+
+    cavity.w = candidate.w
+
+    consumed_strip = Rect(current_right, cavity.y, max_x - current_right, cavity.h)
+    next_free: List[Rect] = []
+    for free_rect in adjusted_free:
+      next_free.extend(subtract_rect(free_rect, consumed_strip, eps))
+    adjusted_free = normalize_free_rects(next_free, eps)
 
   requested: List[CompartmentPlacement] = []
   number = 1
@@ -1702,20 +1815,11 @@ def find_overlapping_compartments(
   return overlaps
 
 
-def get_effective_requested_dimension(actual: float, requested: float) -> float:
-  # Shrink markers should only consider up to 10% shrink as meaningful.
-  min_allowed = requested * 0.9
-  return max(actual, min_allowed)
-
-
 def get_compartment_adjustment_marker(compartment: CompartmentPlacement, eps: float = 1e-6) -> str:
-  effective_requested_w = get_effective_requested_dimension(compartment.w, compartment.requested_w)
-  effective_requested_h = get_effective_requested_dimension(compartment.h, compartment.requested_h)
-
-  wider = compartment.w > effective_requested_w + eps
-  taller = compartment.h > effective_requested_h + eps
-  narrower = compartment.w < effective_requested_w - eps
-  shorter = compartment.h < effective_requested_h - eps
+  wider = compartment.w > compartment.requested_w + eps
+  taller = compartment.h > compartment.requested_h + eps
+  narrower = compartment.w < compartment.requested_w - eps
+  shorter = compartment.h < compartment.requested_h - eps
 
   if compartment.is_free:
     return ""
@@ -1735,10 +1839,9 @@ def format_adjustment_marker_display(marker: str) -> str:
 
 
 def get_axis_adjustment_marker(actual: float, requested: float, eps: float = 1e-6) -> str:
-  effective_requested = get_effective_requested_dimension(actual, requested)
-  if actual > effective_requested + eps:
+  if actual > requested + eps:
     return "+"
-  if actual < effective_requested - eps:
+  if actual < requested - eps:
     return "-"
   return ""
 
@@ -2511,14 +2614,7 @@ def make_scad(
   label_boxes: List[SolidBox],
   label_glyphs: List[LabelGlyph]
 ) -> str:
-  safe_corner_radius = max(
-    0.0,
-    min(
-      outer_corner_radius,
-      outer_length / 2.0 - 0.001,
-      outer_width / 2.0 - 0.001
-    )
-  )
+  _ = outer_corner_radius
 
   lines: List[str] = []
   all_compartments = requested_compartments + free_compartments
@@ -2538,42 +2634,26 @@ def make_scad(
   lines.append(f"outerWallThickness = {outer_wall_thickness:.3f};")
   lines.append(f"innerWallThickness = {inner_wall_thickness:.3f};")
   lines.append(f"bottomThickness = {bottom_thickness:.3f};")
-  lines.append(f"outerCornerRadius = {safe_corner_radius:.3f};")
+  lines.append("outerCornerRadius = 0.000;")
   lines.append("")
   lines.append("$fn = 64;")
   lines.append("")
 
   _ = placed_clusters
 
-  lines.append("module roundedRect2d(length, width, radius)")
-  lines.append("{")
-  lines.append("  if (radius <= 0)")
-  lines.append("  {")
-  lines.append("    square([length, width]);")
-  lines.append("  }")
-  lines.append("  else")
-  lines.append("  {")
-  lines.append("    translate([radius, radius])")
-  lines.append("      offset(r = radius)")
-  lines.append("        square([length - 2 * radius, width - 2 * radius]);")
-  lines.append("  }")
-  lines.append("}")
-  lines.append("")
-
   lines.append("module outerSolid()")
   lines.append("{")
   lines.append("  translate([-outerWallThickness, -outerWallThickness, 0])")
   lines.append("    linear_extrude(height = outerHeight)")
-  lines.append("      roundedRect2d(outerLength, outerWidth, outerCornerRadius);")
+  lines.append("      square([outerLength, outerWidth]);")
   lines.append("}")
   lines.append("")
 
   lines.append("module mainCavity()")
   lines.append("{")
-  lines.append("  innerRadius = outerCornerRadius - outerWallThickness;")
   lines.append("  translate([0, 0, bottomThickness])")
   lines.append("    linear_extrude(height = innerHeight + 1)")
-  lines.append("      roundedRect2d(innerLength, innerWidth, innerRadius);")
+  lines.append("      square([innerLength, innerWidth]);")
   lines.append("}")
   lines.append("")
 
@@ -2905,10 +2985,7 @@ def export_stl(
     label_boxes=label_boxes
   )
   write_ascii_stl(stl_path, triangles)
-
-  if outer_corner_radius > 0:
-    return "builtin-rectangular"
-
+  _ = outer_corner_radius
   return "builtin"
 
 
@@ -3007,7 +3084,7 @@ def main() -> None:
   outer_wall_thickness = ask_float("Enter outer wall thickness in mm", defaults.outer_wall_thickness, allow_zero=False)
   inner_wall_thickness = ask_float("Enter inner divider thickness in mm", defaults.inner_wall_thickness, allow_zero=False)
   bottom_thickness = ask_float("Enter bottom thickness in mm", defaults.bottom_thickness, allow_zero=False)
-  outer_corner_radius = ask_float("Enter outer corner radius in mm", defaults.outer_corner_radius, allow_zero=True)
+  outer_corner_radius = 0.0
 
   inner_length = outer_length - 2.0 * outer_wall_thickness
   inner_width = outer_width - 2.0 * outer_wall_thickness
@@ -3040,7 +3117,7 @@ def main() -> None:
   defaults.outer_wall_thickness = outer_wall_thickness
   defaults.inner_wall_thickness = inner_wall_thickness
   defaults.bottom_thickness = bottom_thickness
-  defaults.outer_corner_radius = outer_corner_radius
+  defaults.outer_corner_radius = 0.0
   defaults.rng_seed = rng_seed
   defaults.layout_attempts = layout_attempts
   defaults.per_item_attempts = per_item_attempts

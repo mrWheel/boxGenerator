@@ -6,7 +6,7 @@
   "outer_wall_thickness": 2.0,
   "inner_wall_thickness": 1.4,
   "bottom_thickness": 1.4,
-  "outer_corner_radius": 2.0,
+  "outer_corner_radius": 0.0,
   "rng_seed": 12345,
   "layout_attempts": 200,
   "per_item_attempts": 200,
