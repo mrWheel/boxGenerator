@@ -1,5 +1,5 @@
 *.json
-!.boxGenerator.example_gap_absorb_demo.json
+!.boxGenerator._boxGeneratorTest.json
 *.scad
 *.stl
 *__pycache__

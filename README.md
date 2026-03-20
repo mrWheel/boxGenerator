@@ -34,6 +34,9 @@ calculating every dimension. The script:
 2. **Optimizes compartment layout** using an advanced bin-packing algorithm that:
    - Attempts multiple layout strategies (default 120 attempts)
    - Automatically tests different orientations (horizontal/vertical)
+   - May rotate compartments when that improves the fit
+   - May shrink a requested compartment up to 10% per axis to make a layout possible
+   - May grow a compartment to absorb otherwise useless leftover strips
    - Minimizes fragmentation for optimal usability
 3. **Generates 3D models**:
    - `{projectname}_box.scad` - OpenSCAD file ready for rendering and export
@@ -41,6 +44,7 @@ calculating every dimension. The script:
 4. **Adds labels** - Auto-generated pixel labels per compartment:
    - Small compartment number
    - Small requested/derived size label (rounded integer format, e.g. `32x24`)
+   - `+` when a compartment grew, `-` when it shrank, `+-` when both happened on different axes
 5. **Saves settings** - Stores all parameters in `.boxGenerator.{projectname}.json` for reuse
 
 ## Requirements
@@ -68,8 +72,9 @@ python3 boxGenerator.py
 The script guides you through:
 
 1. **Project selection** - Choose existing project or create new one
-2. **Box dimensions** - Inner length × width × height (mm)
+2. **Box dimensions** - Outer length × width × height (mm)
    - Example: `300x200x80`
+   - The usable inner area is derived automatically from the wall and bottom thicknesses
 3. **Material parameters**:
    - Outer wall thickness
    - Inner divider thickness
@@ -87,6 +92,7 @@ The script guides you through:
    - Attempts per cluster
 6. **Free space** - Divide remaining space into smaller compartments?
    - Leftover strips are automatically distributed across neighboring fill compartments to avoid unusable gaps
+   - Progress output shows which compartment numbers are still missing during each packing attempt
 
 ### Advanced Options
 
@@ -104,9 +110,8 @@ After initial configuration, the script automatically remembers your project. Pr
 ### {projectname}_box.scad
  Complete OpenSCAD model with:
 - Rounded outer shell
-- Compartments defined as cavities (subtracted)
-- Internal divider walls
-- Directional wall reference comments per wall (`Rnn`, `Bnn`, `Lnn`, `Onn`)
+- Compartments generated individually with `makeCompartment(nr, posX, posY, sizeX, sizeY)`
+- Compartment comments with requested size and adjustment marker information
 - Small dual labels inside each compartment (number + size)
 
 **Customization options in OpenSCAD:**
@@ -123,10 +128,10 @@ Direct 3D-printable binary STL file.
 Saved configuration (hidden file on Unix/Mac):
 ```json
 {
-  "inner_length": 300.0,
-  "inner_width": 200.0,
+   "outer_length": 300.0,
+   "outer_width": 200.0,
+   "outer_height": 80.0,
   "outer_wall_thickness": 2.0,
-Complete OpenSCAD model with:
   "inner_wall_thickness": 2.0,
   "bottom_thickness": 2.0,
   "outer_corner_radius": 10.0,
@@ -174,6 +179,7 @@ Default: 12345. Same seed = same layout. Change for different attempts.
 - Increase `per_item_attempts` (100, 300, ...)
 - Change random seed to try different pattern
 - Reduce compartment dimensions
+- Watch the progress line for the current missing compartment numbers
 
 ### Output looks wrong in OpenSCAD
 - Check if OpenSCAD is updated
@@ -231,13 +237,14 @@ Type 3: 100x100, 2 cells, cluster 1, back/random
 
 ### OpenSCAD Generation
 - **Outer shell** - Rounded rectangle, linearly extruded
-- **Main cavity** - Large rectangle subtracting interior
-- **Internal walls** - Rectangles placed between compartments, annotated with directional cavity refs (`R/B/L/O`)
+- **Main cavity** - Large rectangle subtracting the interior from the outer shell
+- **Compartments** - Generated one by one from the final compartment placements via `makeCompartment(...)`
 - **Labels** - Generated pixel fonts with two small lines per compartment (number + rounded size)
 
 ### Label Format
 - Compartment number: sequential `1..N`
 - Size line: rounded integer format `XxY` (example: `32.5x24.0` is shown as `32x24`)
+- Adjustment marker: `+`, `-`, or `+-` when the actual compartment differs from the requested size
 - Labels use a small fixed pixel size and only shrink further when a compartment is too small
 
 ## Advanced Configuration

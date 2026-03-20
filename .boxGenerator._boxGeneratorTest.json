@@ -1,0 +1,98 @@
+{
+  "outer_length": 300.0,
+  "outer_width": 200.0,
+  "outer_height": 90.0,
+  "inner_wall_height": 75.0,
+  "outer_wall_thickness": 2.0,
+  "inner_wall_thickness": 1.4,
+  "bottom_thickness": 1.4,
+  "outer_corner_radius": 2.0,
+  "rng_seed": 12345,
+  "layout_attempts": 200,
+  "per_item_attempts": 200,
+  "free_cell_w": 25.0,
+  "free_cell_h": 25.0,
+  "compartments": [
+    {
+      "index": 1,
+      "cell_w": 40.0,
+      "cell_h": 40.0,
+      "count": 2,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 2,
+      "cell_w": 45.0,
+      "cell_h": 45.0,
+      "count": 1,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 3,
+      "cell_w": 45.0,
+      "cell_h": 70.0,
+      "count": 1,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 4,
+      "cell_w": 25.0,
+      "cell_h": 80.0,
+      "count": 3,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 5,
+      "cell_w": 100.0,
+      "cell_h": 70.0,
+      "count": 1,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 6,
+      "cell_w": 70.0,
+      "cell_h": 70.0,
+      "count": 3,
+      "cluster_size": 1,
+      "placement_mode": "back",
+      "lateral_mode": "middle"
+    },
+    {
+      "index": 7,
+      "cell_w": 40.0,
+      "cell_h": 80.0,
+      "count": 1,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 8,
+      "cell_w": 30.0,
+      "cell_h": 30.0,
+      "count": 3,
+      "cluster_size": 1,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    },
+    {
+      "index": 9,
+      "cell_w": 50.0,
+      "cell_h": 30.0,
+      "count": 3,
+      "cluster_size": 3,
+      "placement_mode": "random",
+      "lateral_mode": "random"
+    }
+  ]
+}
