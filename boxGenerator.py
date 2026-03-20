@@ -1493,11 +1493,6 @@ def split_narrow_free_rects_by_neighbor_edges(
     x_cuts = {free_rect.x, free_rect.x + free_rect.w}
     y_cuts = {free_rect.y, free_rect.y + free_rect.h}
     is_vertical_strip = free_rect.w <= free_rect.h
-
-    if not is_vertical_strip:
-      split_rects.append(free_rect)
-      continue
-
     distance_limit = max(
       inner_wall_thickness * 2.5,
       min(free_rect.w, free_rect.h) + 2.0 * inner_wall_thickness
@@ -1520,6 +1515,18 @@ def split_narrow_free_rects_by_neighbor_edges(
             y_cuts.add(neighbor_y0)
           if free_rect.y + eps < neighbor_y1 < free_rect.y + free_rect.h - eps:
             y_cuts.add(neighbor_y1)
+      else:
+        is_close_vertically = (
+          spans_overlap_or_touch(free_rect.y, free_rect.y + free_rect.h, neighbor_y0, neighbor_y1, eps) or
+          0.0 <= free_rect.y - neighbor_y1 <= distance_limit or
+          0.0 <= neighbor_y0 - (free_rect.y + free_rect.h) <= distance_limit
+        )
+        if is_close_vertically and spans_overlap_or_touch(free_rect.x, free_rect.x + free_rect.w, neighbor_x0, neighbor_x1, eps):
+          if free_rect.x + eps < neighbor_x0 < free_rect.x + free_rect.w - eps:
+            x_cuts.add(neighbor_x0)
+          if free_rect.x + eps < neighbor_x1 < free_rect.x + free_rect.w - eps:
+            x_cuts.add(neighbor_x1)
+
     xs = sorted(x_cuts)
     ys = sorted(y_cuts)
     for x0, x1 in zip(xs, xs[1:]):
@@ -1529,7 +1536,6 @@ def split_narrow_free_rects_by_neighbor_edges(
         split_rects.append(Rect(x0, y0, x1 - x0, y1 - y0))
 
   return split_rects
-
 
 def build_all_cavities(
   placed_clusters: List[PlacedCluster],
@@ -1696,11 +1702,20 @@ def find_overlapping_compartments(
   return overlaps
 
 
+def get_effective_requested_dimension(actual: float, requested: float) -> float:
+  # Shrink markers should only consider up to 10% shrink as meaningful.
+  min_allowed = requested * 0.9
+  return max(actual, min_allowed)
+
+
 def get_compartment_adjustment_marker(compartment: CompartmentPlacement, eps: float = 1e-6) -> str:
-  wider = compartment.w > compartment.requested_w + eps
-  taller = compartment.h > compartment.requested_h + eps
-  narrower = compartment.w < compartment.requested_w - eps
-  shorter = compartment.h < compartment.requested_h - eps
+  effective_requested_w = get_effective_requested_dimension(compartment.w, compartment.requested_w)
+  effective_requested_h = get_effective_requested_dimension(compartment.h, compartment.requested_h)
+
+  wider = compartment.w > effective_requested_w + eps
+  taller = compartment.h > effective_requested_h + eps
+  narrower = compartment.w < effective_requested_w - eps
+  shorter = compartment.h < effective_requested_h - eps
 
   if compartment.is_free:
     return ""
@@ -1720,9 +1735,10 @@ def format_adjustment_marker_display(marker: str) -> str:
 
 
 def get_axis_adjustment_marker(actual: float, requested: float, eps: float = 1e-6) -> str:
-  if actual > requested + eps:
+  effective_requested = get_effective_requested_dimension(actual, requested)
+  if actual > effective_requested + eps:
     return "+"
-  if actual < requested - eps:
+  if actual < effective_requested - eps:
     return "-"
   return ""
 
@@ -1740,8 +1756,10 @@ def format_requested_size_with_axis_markers(compartment: CompartmentPlacement) -
 def build_compartment_primary_labels(compartments: List[CompartmentPlacement]) -> List[str]:
   labels: List[str] = []
   for compartment in compartments:
+    prefix = "L" if compartment.is_free else "C"
+    base_label = f"{prefix}{compartment.number:02d}"
     marker = get_compartment_adjustment_marker(compartment)
-    labels.append(f"{compartment.number}{format_adjustment_marker_display(marker)}")
+    labels.append(f"{base_label}{format_adjustment_marker_display(marker)}")
   return labels
 
 
@@ -1857,9 +1875,6 @@ def absorb_narrow_free_cavities(
       continue
 
     x_axis_strip = strip.w <= strip.h
-    if not x_axis_strip:
-      continue
-
     axis = "x" if x_axis_strip else "y"
     first_neighbor, second_neighbor = find_neighbors_for_strip(strip_index, axis)
     consumed = False
@@ -2297,6 +2312,20 @@ PIXEL_FONT: dict[str, List[str]] = {
     "101",
     "101"
   ],
+  "C": [
+    "111",
+    "100",
+    "100",
+    "100",
+    "111"
+  ],
+  "L": [
+    "100",
+    "100",
+    "100",
+    "100",
+    "111"
+  ],
   "+": [
     "000",
     "010",
@@ -2612,7 +2641,9 @@ def make_scad(
       f"      makeCompartment({compartment.number}, {compartment.x:.3f}, {compartment.y:.3f}, {compartment.w:.3f}, {compartment.h:.3f});"
     )
   for glyph in label_glyphs:
-    lines.append(f"      //-- C{glyph.compartment_number:02d}: {glyph.text}")
+    glyph_is_free = glyph.compartment_number > len(requested_compartments)
+    glyph_prefix = "L" if glyph_is_free else "C"
+    lines.append(f"      //-- {glyph_prefix}{glyph.compartment_number:02d}: {glyph.text}")
     for label_box in glyph.boxes:
       lines.append(
         f"      labelBlock({label_box.x:.3f}, {label_box.y:.3f}, {label_box.z:.3f}, "
