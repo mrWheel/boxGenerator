@@ -1,5 +1,6 @@
 *.json
 !.boxGenerator._boxGeneratorTest.json
+!.gridLayout._gridLayoutGeneratorTest.json
 *.scad
 *.stl
 *__pycache__

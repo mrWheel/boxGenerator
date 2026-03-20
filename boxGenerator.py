@@ -3247,12 +3247,12 @@ def main() -> None:
     label_glyphs=label_glyphs
   )
 
-  output_path = Path(f"{project_name}_box.scad")
+  output_path = Path(f"{project_name}.scad")
 
   with output_path.open("w", encoding="utf-8") as handle:
     handle.write(scad_text)
 
-  stl_path = Path(f"{project_name}_box.stl")
+  stl_path = Path(f"{project_name}.stl")
   stl_export_method = export_stl(
     stl_path=stl_path,
     outer_length=outer_length,
