@@ -53,6 +53,11 @@ class LabelGlyph:
 @dataclass
 class RunDefaults:
   grid_size: float = 40.0
+  rng_seed: int = 12345
+  layout_attempts: int = 100
+  per_item_attempts: int = 50
+  leftover_length: Optional[float] = 25.0
+  leftover_width: Optional[float] = 25.0
   outer_length: float = 280.0
   outer_width: float = 200.0
   outer_height: float = 60.0
@@ -126,6 +131,11 @@ def load_defaults(path: Path) -> RunDefaults:
 
   return RunDefaults(
     grid_size=float(data.get("grid_size", 40.0)),
+    rng_seed=int(data.get("rng_seed", 12345)),
+    layout_attempts=int(data.get("layout_attempts", 100)),
+    per_item_attempts=int(data.get("per_item_attempts", 50)),
+    leftover_length=(None if data.get("leftover_length") is None else float(data.get("leftover_length"))),
+    leftover_width=(None if data.get("leftover_width") is None else float(data.get("leftover_width"))),
     outer_length=float(data.get("outer_length", 280.0)),
     outer_width=float(data.get("outer_width", 200.0)),
     outer_height=float(data.get("outer_height", 60.0)),
@@ -141,6 +151,11 @@ def load_defaults(path: Path) -> RunDefaults:
 def save_defaults(path: Path, defaults: RunDefaults) -> None:
   data = {
     "grid_size": defaults.grid_size,
+    "rng_seed": defaults.rng_seed,
+    "layout_attempts": defaults.layout_attempts,
+    "per_item_attempts": defaults.per_item_attempts,
+    "leftover_length": defaults.leftover_length,
+    "leftover_width": defaults.leftover_width,
     "outer_length": defaults.outer_length,
     "outer_width": defaults.outer_width,
     "outer_height": defaults.outer_height,
@@ -183,6 +198,32 @@ def ask_float(prompt: str, default_value: float) -> float:
   except ValueError:
     print(f"Invalid input, using default {format_mm(default_value)}.")
     return default_value
+
+
+def ask_leftover_compartment_size(
+  default_length: Optional[float],
+  default_width: Optional[float]
+) -> Optional[Tuple[float, float]]:
+  default_text = "-"
+  if default_length is not None and default_width is not None:
+    default_text = f"{format_mm(default_length)}x{format_mm(default_width)}"
+
+  raw = input(f"Enter leftover compartment size (length x width, '-' = skip) [{default_text}]: ").strip()
+  if not raw:
+    if default_length is None or default_width is None:
+      return None
+    return default_length, default_width
+
+  if raw == "-":
+    return None
+
+  try:
+    return parse_2d_mm(raw)
+  except ValueError:
+    print(f"Invalid input, using default {default_text}.")
+    if default_length is None or default_width is None:
+      return None
+    return default_length, default_width
 
 
 def parse_2d_mm(text: str) -> Tuple[float, float]:
@@ -484,63 +525,208 @@ def build_layout(
   grid_rows: int,
   grid_size: float,
   inner_wall: float,
-  specs: List[CompartmentSpec]
+  specs: List[CompartmentSpec],
+  rng_seed: int = 12345,
+  layout_attempts: int = 100,
+  per_item_attempts: int = 50,
+  leftover_cells: Optional[Tuple[int, int]] = (1, 1),
+  show_progress: bool = True
 ) -> Tuple[List[Placement], Dict[int, int], int]:
+  def format_missing_specs(missing_by_spec: Dict[int, int]) -> str:
+    missing_parts: List[str] = []
+    for spec in specs:
+      missing = missing_by_spec.get(spec.index, 0)
+      if missing > 0:
+        missing_parts.append(f"spec {spec.index:02d} x{missing}")
+    if not missing_parts:
+      return "-"
+    return ", ".join(missing_parts)
+
+  def free_fragmentation_score(occ: List[List[bool]]) -> Tuple[int, int, int]:
+    visited = [[False for _ in range(grid_cols)] for _ in range(grid_rows)]
+    component_count = 0
+    tiny_components = 0
+    largest_component = 0
+
+    for yy in range(grid_rows):
+      for xx in range(grid_cols):
+        if occ[yy][xx] or visited[yy][xx]:
+          continue
+
+        component_count += 1
+        stack = [(xx, yy)]
+        visited[yy][xx] = True
+        comp_size = 0
+
+        while stack:
+          cx, cy = stack.pop()
+          comp_size += 1
+
+          for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+            if nx < 0 or nx >= grid_cols or ny < 0 or ny >= grid_rows:
+              continue
+            if occ[ny][nx] or visited[ny][nx]:
+              continue
+            visited[ny][nx] = True
+            stack.append((nx, ny))
+
+        if comp_size <= 2:
+          tiny_components += 1
+        if comp_size > largest_component:
+          largest_component = comp_size
+
+    return component_count, tiny_components, -largest_component
+
+  def build_candidate_list(
+    occupied: List[List[bool]],
+    grid_w: int,
+    grid_h: int,
+    y_order: List[int],
+    x_order: List[int],
+    prefer_rotated: bool,
+    attempt_rng: random.Random,
+    candidate_limit: int
+  ) -> List[Tuple[Tuple[int, int, int], int, int, int, int]]:
+    orientations: List[Tuple[int, int]] = [(grid_w, grid_h)]
+    if grid_w != grid_h:
+      orientations.append((grid_h, grid_w))
+    if prefer_rotated and len(orientations) == 2:
+      orientations = [orientations[1], orientations[0]]
+
+    all_candidates: List[Tuple[int, int, int, int]] = []
+    for y in y_order:
+      for x in x_order:
+        for place_w, place_h in orientations:
+          if can_place(occupied, x, y, place_w, place_h):
+            all_candidates.append((x, y, place_w, place_h))
+
+    if not all_candidates:
+      return []
+
+    if candidate_limit > 0 and len(all_candidates) > candidate_limit:
+      eval_candidates = attempt_rng.sample(all_candidates, candidate_limit)
+    else:
+      eval_candidates = all_candidates
+
+    scored_candidates: List[Tuple[Tuple[int, int, int], int, int, int, int]] = []
+    for cand_x, cand_y, cand_w, cand_h in eval_candidates:
+      test_occ = [row[:] for row in occupied]
+      fill_cells(test_occ, cand_x, cand_y, cand_w, cand_h)
+      score = free_fragmentation_score(test_occ)
+      scored_candidates.append((score, cand_x, cand_y, cand_w, cand_h))
+
+    scored_candidates.sort(key=lambda entry: entry[0])
+    return scored_candidates
+
   def run_single_attempt(
     queue: List[Tuple[int, int, int]],
     y_order: List[int],
     x_order: List[int],
-    prefer_rotated: bool
+    prefer_rotated: bool,
+    attempt_rng: random.Random
   ) -> Tuple[List[Placement], Dict[int, int], int, List[List[bool]]]:
     occupied = [[False for _ in range(grid_cols)] for _ in range(grid_rows)]
-    placements: List[Placement] = []
-    missing_by_spec: Dict[int, int] = {spec.index: 0 for spec in specs}
+    best_attempt_placements: List[Placement] = []
+    best_attempt_missing_by_spec: Dict[int, int] = {spec.index: spec.count for spec in specs}
+    best_attempt_missing_total = len(queue)
+    best_attempt_occupied = [row[:] for row in occupied]
 
-    requested_counter = 1
-    for spec_index, grid_w, grid_h in queue:
-      placed = False
-      orientations: List[Tuple[int, int]] = [(grid_w, grid_h)]
-      if grid_w != grid_h:
-        orientations.append((grid_h, grid_w))
-      if prefer_rotated and len(orientations) == 2:
-        orientations = [orientations[1], orientations[0]]
+    def search(
+      item_index: int,
+      occ: List[List[bool]],
+      current_placements: List[Placement],
+      current_missing_by_spec: Dict[int, int],
+      requested_counter: int
+    ) -> bool:
+      nonlocal best_attempt_placements
+      nonlocal best_attempt_missing_by_spec
+      nonlocal best_attempt_missing_total
+      nonlocal best_attempt_occupied
 
-      for y in y_order:
-        for x in x_order:
-          for place_w, place_h in orientations:
-            if not can_place(occupied, x, y, place_w, place_h):
-              continue
+      current_missing_total = sum(current_missing_by_spec.values())
+      remaining_items = len(queue) - item_index
+      current_placed = len(current_placements)
+      best_placed = len(best_attempt_placements)
 
-            fill_cells(occupied, x, y, place_w, place_h)
-            placements.append(
-              Placement(
-                label=f"C{requested_counter:02d}",
-                is_leftover=False,
-                requested_w_cells=grid_w,
-                requested_h_cells=grid_h,
-                x_cell=x,
-                y_cell=y,
-                w_cells=place_w,
-                h_cells=place_h,
-                x_mm=x * grid_size,
-                y_mm=y * grid_size,
-                w_mm=grid_to_mm_size(place_w, grid_size, inner_wall),
-                h_mm=grid_to_mm_size(place_h, grid_size, inner_wall)
-              )
-            )
-            requested_counter += 1
-            placed = True
-            break
-          if placed:
-            break
-        if placed:
-          break
+      if current_missing_total > best_attempt_missing_total:
+        return False
+      if current_missing_total == best_attempt_missing_total and current_placed + remaining_items <= best_placed:
+        return False
 
-      if not placed:
-        missing_by_spec[spec_index] += 1
+      if item_index >= len(queue):
+        if (
+          current_missing_total < best_attempt_missing_total
+          or (current_missing_total == best_attempt_missing_total and current_placed > best_placed)
+        ):
+          best_attempt_placements = list(current_placements)
+          best_attempt_missing_by_spec = dict(current_missing_by_spec)
+          best_attempt_missing_total = current_missing_total
+          best_attempt_occupied = [row[:] for row in occ]
+        return current_missing_total == 0
 
-    missing_total = sum(missing_by_spec.values())
-    return placements, missing_by_spec, missing_total, occupied
+      spec_index, grid_w, grid_h = queue[item_index]
+      scored_candidates = build_candidate_list(
+        occupied=occ,
+        grid_w=grid_w,
+        grid_h=grid_h,
+        y_order=y_order,
+        x_order=x_order,
+        prefer_rotated=prefer_rotated,
+        attempt_rng=attempt_rng,
+        candidate_limit=max(per_item_attempts, 0)
+      )
+
+      branch_limit = max(1, min(8, len(scored_candidates)))
+      for _, cand_x, cand_y, cand_w, cand_h in scored_candidates[:branch_limit]:
+        next_occ = [row[:] for row in occ]
+        fill_cells(next_occ, cand_x, cand_y, cand_w, cand_h)
+        next_placements = list(current_placements)
+        next_placements.append(
+          Placement(
+            label=f"C{requested_counter:02d}",
+            is_leftover=False,
+            requested_w_cells=grid_w,
+            requested_h_cells=grid_h,
+            x_cell=cand_x,
+            y_cell=cand_y,
+            w_cells=cand_w,
+            h_cells=cand_h,
+            x_mm=cand_x * grid_size,
+            y_mm=cand_y * grid_size,
+            w_mm=grid_to_mm_size(cand_w, grid_size, inner_wall),
+            h_mm=grid_to_mm_size(cand_h, grid_size, inner_wall)
+          )
+        )
+
+        if search(
+          item_index=item_index + 1,
+          occ=next_occ,
+          current_placements=next_placements,
+          current_missing_by_spec=current_missing_by_spec,
+          requested_counter=requested_counter + 1
+        ):
+          return True
+
+      next_missing_by_spec = dict(current_missing_by_spec)
+      next_missing_by_spec[spec_index] += 1
+      return search(
+        item_index=item_index + 1,
+        occ=occ,
+        current_placements=current_placements,
+        current_missing_by_spec=next_missing_by_spec,
+        requested_counter=requested_counter
+      )
+
+    initial_missing_by_spec: Dict[int, int] = {spec.index: 0 for spec in specs}
+    search(
+      item_index=0,
+      occ=occupied,
+      current_placements=[],
+      current_missing_by_spec=initial_missing_by_spec,
+      requested_counter=1
+    )
+
+    return best_attempt_placements, best_attempt_missing_by_spec, best_attempt_missing_total, best_attempt_occupied
 
   # Place larger compartments first, but evaluate many order variants.
   placement_queue: List[Tuple[int, int, int]] = []
@@ -552,16 +738,10 @@ def build_layout(
   if queue_len == 0:
     return [], {spec.index: 0 for spec in specs}, 0
 
-  weighted_sum = sum((entry[0] * 31 + entry[1] * 17 + entry[2] * 13) for entry in placement_queue)
-  seed = (
-    grid_cols * 100003
-    + grid_rows * 1009
-    + int(round(grid_size * 1000.0)) * 97
-    + weighted_sum
-  )
-  rng = random.Random(seed)
+  seed = int(rng_seed)
 
-  attempts = max(12, min(320, queue_len * 20))
+  attempts = max(1, int(layout_attempts))
+  progress_step = max(1, attempts // 12)
   best_placements: List[Placement] = []
   best_missing_by_spec: Dict[int, int] = {spec.index: spec.count for spec in specs}
   best_missing_total = queue_len
@@ -571,14 +751,15 @@ def build_layout(
   base_x = list(range(grid_cols))
 
   for attempt_index in range(attempts):
+    attempt_rng = random.Random(seed + attempt_index)
     queue = placement_queue.copy()
-    rng.shuffle(queue)
+    attempt_rng.shuffle(queue)
     queue.sort(
       key=lambda entry: (
         entry[1] * entry[2],
         max(entry[1], entry[2]),
         min(entry[1], entry[2]),
-        rng.random()
+        attempt_rng.random()
       ),
       reverse=True
     )
@@ -591,7 +772,8 @@ def build_layout(
       queue=queue,
       y_order=y_order,
       x_order=x_order,
-      prefer_rotated=prefer_rotated
+      prefer_rotated=prefer_rotated,
+      attempt_rng=attempt_rng
     )
 
     placed_requested = len(placements)
@@ -605,32 +787,48 @@ def build_layout(
       best_missing_total = missing_total
       best_occupied = occupied
 
+    if show_progress and (
+      attempt_index == 0
+      or (attempt_index + 1) % progress_step == 0
+      or attempt_index + 1 == attempts
+      or best_missing_total == 0
+    ):
+      print(
+        f"Packing progress: attempt {attempt_index + 1}/{attempts}, "
+        f"best placed compartments {len(best_placements)}/{queue_len}, "
+        f"current missing compartments {format_missing_specs(missing_by_spec)}"
+      )
+
     if best_missing_total == 0:
       break
 
   # Fill leftover grid cells only when all requested compartments fit.
-  if best_missing_total == 0:
+  if best_missing_total == 0 and leftover_cells is not None:
+    leftover_w, leftover_h = leftover_cells
+    if leftover_w <= 0 or leftover_h <= 0:
+      leftover_w, leftover_h = 1, 1
+
     leftover_counter = 1
     for y in range(grid_rows):
       for x in range(grid_cols):
-        if best_occupied[y][x]:
+        if not can_place(best_occupied, x, y, leftover_w, leftover_h):
           continue
 
-        best_occupied[y][x] = True
+        fill_cells(best_occupied, x, y, leftover_w, leftover_h)
         best_placements.append(
           Placement(
             label=f"L{leftover_counter:02d}",
             is_leftover=True,
-            requested_w_cells=1,
-            requested_h_cells=1,
+            requested_w_cells=leftover_w,
+            requested_h_cells=leftover_h,
             x_cell=x,
             y_cell=y,
-            w_cells=1,
-            h_cells=1,
+            w_cells=leftover_w,
+            h_cells=leftover_h,
             x_mm=x * grid_size,
             y_mm=y * grid_size,
-            w_mm=grid_to_mm_size(1, grid_size, inner_wall),
-            h_mm=grid_to_mm_size(1, grid_size, inner_wall)
+            w_mm=grid_to_mm_size(leftover_w, grid_size, inner_wall),
+            h_mm=grid_to_mm_size(leftover_h, grid_size, inner_wall)
           )
         )
         leftover_counter += 1
@@ -1126,6 +1324,16 @@ def main() -> None:
 
   mode = ask_mode(defaults.mode)
   defaults.mode = mode
+  leftover_size = None
+  defaults.leftover_length = None
+  defaults.leftover_width = None
+
+  rng_seed = ask_int("Enter random seed (rngSeed)", defaults.rng_seed, min_value=0)
+  defaults.rng_seed = rng_seed
+  layout_attempts = ask_int("Enter number of layout attempts", defaults.layout_attempts, min_value=1)
+  per_item_attempts = ask_int("Enter number of attempts per cluster group", defaults.per_item_attempts, min_value=1)
+  defaults.layout_attempts = layout_attempts
+  defaults.per_item_attempts = per_item_attempts
 
   if mode == 1:
     grid_size = ask_float("Enter gridSize in mm", defaults.grid_size)
@@ -1195,6 +1403,9 @@ def main() -> None:
     return
 
   defaults.mode = mode
+  defaults.rng_seed = rng_seed
+  defaults.layout_attempts = layout_attempts
+  defaults.per_item_attempts = per_item_attempts
   defaults.grid_size = grid_size
   defaults.outer_length = outer_length
   defaults.outer_width = outer_width
@@ -1206,12 +1417,18 @@ def main() -> None:
   defaults.compartments = specs
   save_defaults(defaults_path, defaults)
 
+  leftover_cells: Optional[Tuple[int, int]] = (1, 1)
+
   placements, missing_by_spec, missing_total = build_layout(
     grid_cols=grid_cols,
     grid_rows=grid_rows,
     grid_size=grid_size,
     inner_wall=inner_wall,
-    specs=specs
+    specs=specs,
+    rng_seed=rng_seed,
+    layout_attempts=layout_attempts,
+    per_item_attempts=per_item_attempts,
+    leftover_cells=leftover_cells
   )
 
   print("")
@@ -1234,12 +1451,23 @@ def main() -> None:
     print("Tip: reduce the listed counts or use a larger box/grid.")
   else:
     leftovers = len([p for p in placements if p.is_leftover])
-    print(f"All requested compartments fit. Leftover 1x1 compartments added: {leftovers}")
+    if leftover_cells is None:
+      print("All requested compartments fit. Leftover compartments: skipped.")
+    else:
+      print(
+        f"All requested compartments fit. Leftover {leftover_cells[0]}x{leftover_cells[1]} "
+        f"compartments added: {leftovers}"
+      )
 
   output_data = {
     "project": project_name,
     "mode": mode,
     "grid_size": grid_size,
+    "rng_seed": rng_seed,
+    "layout_attempts": layout_attempts,
+    "per_item_attempts": per_item_attempts,
+    "leftover_length": (None if leftover_size is None else leftover_size[0]),
+    "leftover_width": (None if leftover_size is None else leftover_size[1]),
     "outer_length": outer_length,
     "outer_width": outer_width,
     "outer_height": outer_height,
