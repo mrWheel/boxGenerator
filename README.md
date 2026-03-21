@@ -95,6 +95,9 @@ Included example profile for `boxGenerator.py`:
 
 Choose project `_boxGeneratorTest` in the menu.
 
+<img width="788" height="541" alt="boxGeneratorTest" src="https://github.com/user-attachments/assets/149e5114-00a7-4903-a362-c57d4c4a78fc" />
+
+
 ## boxGenerator.py
 
 ### Purpose
@@ -190,8 +193,14 @@ The program asks for:
 Layout mode can be:
 
 1. fixed grid,
+<img width="718" height="531" alt="gridsLayoutGeneratorMode1" src="https://github.com/user-attachments/assets/5beeecf5-fdf7-4df8-b7f0-45e1c5b06134" />
+
 2. fixed box length with suggested grid sizes and valid widths,
+<img width="616" height="752" alt="gridLayoutGeneratorMode2" src="https://github.com/user-attachments/assets/1de637a0-8db5-4032-a824-2304d5673357" />
+
 3. fixed box width with suggested grid sizes and valid lengths.
+<img width="781" height="631" alt="gridLayoutGeneratorMode3" src="https://github.com/user-attachments/assets/6e17ca46-c4ef-49c9-9c54-e13770c7be5f" />
+
 
 Compartment input is a repeated `NxM` plus count loop.
 
@@ -319,10 +328,6 @@ Example:
 
 That means the user requested `2x3`, but the solver placed it rotated as `3x2`.
 
-## AI Reimplementation Brief
-
-If an AI has to rewrite both tools from scratch, use this section as the minimum functional contract.
-
 ### Shared Requirements
 
 1. Language: Python 3 with standard library only.
@@ -385,9 +390,7 @@ A rewrite does need to preserve:
 4. the practical layout behavior,
 5. the emitted file types and overall geometry meaning.
 
-## Copyable AI Prompt
-
-Use the text below when asking an AI to recreate these tools.
+## Design Highlights
 
 ```text
 Rewrite two Python CLI programs named boxGenerator.py and gridLayoutGenerator.py.
