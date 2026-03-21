@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**boxGenerator** is a Python tool that generates OpenSCAD scripts for 3D-printable storage boxes with customizable compartments.
+**boxGenerator** and **gridLayoutGenerator.py** are Python tools that generates OpenSCAD scripts for 3D-printable storage boxes with customizable compartments.
 
 ### Key Features
 - Interactive CLI for box configuration (dimensions, walls, compartments)

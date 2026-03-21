@@ -56,6 +56,7 @@ class RunDefaults:
   inner_wall: float = 1.0
   bottom_thickness: float = 1.4
   inner_wall_height: float = 58.6
+  mode: int = 1
   compartments: Optional[List[CompartmentSpec]] = None
 
 
@@ -128,6 +129,7 @@ def load_defaults(path: Path) -> RunDefaults:
     inner_wall=float(data.get("inner_wall", 1.0)),
     bottom_thickness=float(data.get("bottom_thickness", data.get("outer_wall", 1.4))),
     inner_wall_height=float(data.get("inner_wall_height", 58.6)),
+    mode=int(data.get("mode", 1)),
     compartments=specs
   )
 
@@ -142,6 +144,7 @@ def save_defaults(path: Path, defaults: RunDefaults) -> None:
     "inner_wall": defaults.inner_wall,
     "bottom_thickness": defaults.bottom_thickness,
     "inner_wall_height": defaults.inner_wall_height,
+    "mode": defaults.mode,
     "compartments": [
       {
         "index": spec.index,
@@ -221,6 +224,89 @@ def build_outer_size_suggestions(
     suggestions.append(step * grid_size)
 
   return suggestions
+
+
+def find_valid_grid_sizes(
+  dimension: float,
+  min_gs: float = 20.0,
+  max_gs: float = 60.0
+) -> List[float]:
+  """Return integer grid sizes in [min_gs, max_gs] that evenly divide dimension."""
+  if dimension <= 0:
+    return []
+  results: List[float] = []
+  gs = int(math.ceil(min_gs))
+  while gs <= int(math.floor(max_gs)):
+    steps = dimension / gs
+    if abs(steps - round(steps)) < 1e-9 and round(steps) >= 1:
+      results.append(float(gs))
+    gs += 1
+  return results
+
+
+def ask_mode(default_mode: int) -> int:
+  print("")
+  print("Layout mode:")
+  print("  [1] Fixed grid        (enter gridSize, then box dimensions)")
+  print("  [2] Fixed box Length  (suggest gridSize and box Width)")
+  print("  [3] Fixed box Width   (suggest gridSize and box Length)")
+  while True:
+    raw = input(f"Choice [1-3] [{default_mode}]: ").strip()
+    if not raw:
+      return default_mode
+    try:
+      choice = int(raw)
+      if 1 <= choice <= 3:
+        return choice
+    except ValueError:
+      pass
+    print("Please enter 1, 2, or 3.")
+
+
+def ask_fixed_dim_mode(
+  fixed_dim_label: str,
+  other_dim_label: str,
+  default_fixed: float,
+  default_other: float,
+  default_height: float,
+  default_grid_size: float
+) -> Tuple[float, float, float, float]:
+  """
+  Mode 2/3 flow: ask for one fixed outer floor dimension, suggest valid
+  gridSizes that divide it exactly, then suggest multiples for the other
+  floor dimension.  Returns (fixed_mm, other_mm, outer_height_mm, grid_size_mm).
+  """
+  fixed_dim = ask_float(f"Enter fixed box {fixed_dim_label} (outer) in mm", default_fixed)
+
+  valid_gs = find_valid_grid_sizes(fixed_dim)
+  if valid_gs:
+    print("  Valid gridSizes: " + ", ".join(f"{gs:g}mm" for gs in valid_gs))
+    closest_idx = min(range(len(valid_gs)), key=lambda i: abs(valid_gs[i] - default_grid_size))
+    gs_default = valid_gs[closest_idx]
+  else:
+    print(f"  No integer gridSize between 20-60mm divides {fixed_dim:g}mm exactly; enter manually.")
+    gs_default = default_grid_size
+
+  grid_size = ask_float("  Select gridSize in mm", gs_default)
+
+  steps_fixed = fixed_dim / grid_size if grid_size > 0 else 0
+  if abs(steps_fixed - round(steps_fixed)) > 1e-9:
+    corrected = round(steps_fixed)
+    if corrected > 0:
+      grid_size = fixed_dim / corrected
+    print(f"  Adjusted gridSize to {grid_size:g}mm so {fixed_dim:g} / gridSize is an integer.")
+
+  other_multiples = build_outer_size_suggestions(grid_size, min_size=100.0, max_size=350.0)
+  if other_multiples:
+    print("  Valid box " + other_dim_label + "s (100-350mm): " + ", ".join(f"{v:g}" for v in other_multiples))
+    other_default = min(other_multiples, key=lambda v: abs(v - default_other))
+  else:
+    other_default = default_other
+
+  other_dim = ask_float(f"  Enter box {other_dim_label} (outer) in mm", other_default)
+  outer_height = ask_float("Enter box Height (outer, vertical) in mm", default_height)
+
+  return fixed_dim, other_dim, outer_height, grid_size
 
 
 def ask_outer_size(
@@ -892,27 +978,56 @@ def main() -> None:
 
   defaults = load_defaults(defaults_path)
 
-  grid_size = ask_float("Enter gridSize in mm", defaults.grid_size)
+  mode = ask_mode(defaults.mode)
 
-  while True:
-    outer_length, outer_width, outer_height = ask_outer_size(
-      defaults.outer_length,
-      defaults.outer_width,
-      defaults.outer_height,
-      grid_size
+  if mode == 1:
+    grid_size = ask_float("Enter gridSize in mm", defaults.grid_size)
+
+    while True:
+      outer_length, outer_width, outer_height = ask_outer_size(
+        defaults.outer_length,
+        defaults.outer_width,
+        defaults.outer_height,
+        grid_size
+      )
+      cols = outer_length / grid_size
+      rows = outer_width / grid_size
+
+      if abs(cols - round(cols)) <= 1e-9 and abs(rows - round(rows)) <= 1e-9:
+        grid_cols = int(round(cols))
+        grid_rows = int(round(rows))
+        break
+
+      print("")
+      print("Error: outer dimensions must each be an exact multiple of gridSize.")
+      print(f"Given: L/gridSize={cols:.6f}, W/gridSize={rows:.6f}")
+      print("Please re-enter the outer size.")
+
+  elif mode == 2:
+    outer_length, outer_width, outer_height, grid_size = ask_fixed_dim_mode(
+      fixed_dim_label="Length",
+      other_dim_label="Width",
+      default_fixed=defaults.outer_length,
+      default_other=defaults.outer_width,
+      default_height=defaults.outer_height,
+      default_grid_size=defaults.grid_size
     )
-    cols = outer_length / grid_size
-    rows = outer_width / grid_size
+    grid_cols = int(round(outer_length / grid_size))
+    grid_rows = int(round(outer_width / grid_size))
 
-    if abs(cols - round(cols)) <= 1e-9 and abs(rows - round(rows)) <= 1e-9:
-      grid_cols = int(round(cols))
-      grid_rows = int(round(rows))
-      break
-
-    print("")
-    print("Error: outer dimensions must each be an exact multiple of gridSize.")
-    print(f"Given: L/gridSize={cols:.6f}, W/gridSize={rows:.6f}")
-    print("Please re-enter the outer size.")
+  else:  # mode == 3
+    fixed_out, other_out, outer_height, grid_size = ask_fixed_dim_mode(
+      fixed_dim_label="Width",
+      other_dim_label="Length",
+      default_fixed=defaults.outer_width,
+      default_other=defaults.outer_length,
+      default_height=defaults.outer_height,
+      default_grid_size=defaults.grid_size
+    )
+    outer_width = fixed_out
+    outer_length = other_out
+    grid_cols = int(round(outer_length / grid_size))
+    grid_rows = int(round(outer_width / grid_size))
 
   outer_wall = ask_float("Enter outer wall thickness (outerWall) in mm", defaults.outer_wall)
   inner_wall = ask_float("Enter inner wall thickness (innerWall) in mm", defaults.inner_wall)
@@ -931,6 +1046,7 @@ def main() -> None:
     print("No compartments entered. Stopping.")
     return
 
+  defaults.mode = mode
   defaults.grid_size = grid_size
   defaults.outer_length = outer_length
   defaults.outer_width = outer_width
