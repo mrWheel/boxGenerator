@@ -2,6 +2,8 @@
 
 import json
 import math
+import random
+from decimal import Decimal, ROUND_HALF_UP
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -19,6 +21,8 @@ class CompartmentSpec:
 class Placement:
   label: str
   is_leftover: bool
+  requested_w_cells: int
+  requested_h_cells: int
   x_cell: int
   y_cell: int
   w_cells: int
@@ -158,8 +162,17 @@ def save_defaults(path: Path, defaults: RunDefaults) -> None:
   path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def format_mm(value: float) -> str:
+  rounded_1 = float(Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+  if abs(rounded_1 - round(rounded_1)) <= 1e-9:
+    if abs(value - round(value)) <= 1e-9:
+      return f"{int(round(value))}"
+    return f"{rounded_1:.1f}"
+  return f"{rounded_1:.1f}"
+
+
 def ask_float(prompt: str, default_value: float) -> float:
-  raw = input(f"{prompt} [{default_value}]: ").strip()
+  raw = input(f"{prompt} [{format_mm(default_value)}]: ").strip()
   if not raw:
     return default_value
   try:
@@ -168,7 +181,7 @@ def ask_float(prompt: str, default_value: float) -> float:
       raise ValueError
     return value
   except ValueError:
-    print(f"Invalid input, using default {default_value}.")
+    print(f"Invalid input, using default {format_mm(default_value)}.")
     return default_value
 
 
@@ -263,6 +276,30 @@ def ask_mode(default_mode: int) -> int:
     print("Please enter 1, 2, or 3.")
 
 
+def ask_choice_from_suggestions(
+  prompt: str,
+  suggestions: List[float],
+  default_value: float
+) -> float:
+  print(prompt)
+  for index, value in enumerate(suggestions, start=1):
+    print(f"  [{index}] {format_mm(value)}")
+
+  default_index = min(range(len(suggestions)), key=lambda i: abs(suggestions[i] - default_value)) + 1
+
+  while True:
+    raw = input(f"Choose option [1-{len(suggestions)}] [{default_index}]: ").strip()
+    if not raw:
+      return suggestions[default_index - 1]
+    try:
+      choice = int(raw)
+      if 1 <= choice <= len(suggestions):
+        return suggestions[choice - 1]
+    except ValueError:
+      pass
+    print(f"Please enter a number between 1 and {len(suggestions)}.")
+
+
 def ask_fixed_dim_mode(
   fixed_dim_label: str,
   other_dim_label: str,
@@ -280,11 +317,11 @@ def ask_fixed_dim_mode(
 
   valid_gs = find_valid_grid_sizes(fixed_dim)
   if valid_gs:
-    print("  Valid gridSizes: " + ", ".join(f"{gs:g}mm" for gs in valid_gs))
+    print("  Valid gridSizes: " + ", ".join(f"{format_mm(gs)}mm" for gs in valid_gs))
     closest_idx = min(range(len(valid_gs)), key=lambda i: abs(valid_gs[i] - default_grid_size))
     gs_default = valid_gs[closest_idx]
   else:
-    print(f"  No integer gridSize between 20-60mm divides {fixed_dim:g}mm exactly; enter manually.")
+    print(f"  No integer gridSize between 20-60mm divides {format_mm(fixed_dim)}mm exactly; enter manually.")
     gs_default = default_grid_size
 
   grid_size = ask_float("  Select gridSize in mm", gs_default)
@@ -294,16 +331,27 @@ def ask_fixed_dim_mode(
     corrected = round(steps_fixed)
     if corrected > 0:
       grid_size = fixed_dim / corrected
-    print(f"  Adjusted gridSize to {grid_size:g}mm so {fixed_dim:g} / gridSize is an integer.")
+    print(
+      f"  Adjusted gridSize to {format_mm(grid_size)}mm "
+      f"so {format_mm(fixed_dim)} / gridSize is an integer."
+    )
 
   other_multiples = build_outer_size_suggestions(grid_size, min_size=100.0, max_size=350.0)
   if other_multiples:
-    print("  Valid box " + other_dim_label + "s (100-350mm): " + ", ".join(f"{v:g}" for v in other_multiples))
+    print(
+      "  Valid box " + other_dim_label + "s (100-350mm): "
+      + ", ".join(format_mm(v) for v in other_multiples)
+    )
     other_default = min(other_multiples, key=lambda v: abs(v - default_other))
+    other_dim = ask_choice_from_suggestions(
+      f"  Select box {other_dim_label} from suggested values:",
+      other_multiples,
+      other_default
+    )
   else:
     other_default = default_other
+    other_dim = ask_float(f"  Enter box {other_dim_label} (outer) in mm", other_default)
 
-  other_dim = ask_float(f"  Enter box {other_dim_label} (outer) in mm", other_default)
   outer_height = ask_float("Enter box Height (outer, vertical) in mm", default_height)
 
   return fixed_dim, other_dim, outer_height, grid_size
@@ -315,10 +363,10 @@ def ask_outer_size(
   default_height: float,
   grid_size: float
 ) -> Tuple[float, float, float]:
-  default_text = f"{default_length:g}x{default_width:g}x{default_height:g}"
+  default_text = f"{format_mm(default_length)}x{format_mm(default_width)}x{format_mm(default_height)}"
   suggestions = build_outer_size_suggestions(grid_size)
   if suggestions:
-    suggestion_text = ", ".join(f"{value:g}" for value in suggestions)
+    suggestion_text = ", ".join(format_mm(value) for value in suggestions)
     print(f"Axis values (gridSize multiples, 100..300): {suggestion_text}")
   raw = input(f"Enter complete outer box size in mm (LxWxH) [{default_text}]: ").strip()
   if not raw:
@@ -345,14 +393,14 @@ def parse_compartment_grid_size(text: str) -> Tuple[int, int]:
   return grid_w, grid_h
 
 
-def ask_int(prompt: str, default_value: int) -> int:
+def ask_int(prompt: str, default_value: int, min_value: int = 1) -> int:
   raw = input(f"{prompt} [{default_value}]: ").strip()
   if not raw:
     return default_value
 
   try:
     value = int(raw)
-    if value <= 0:
+    if value < min_value:
       raise ValueError
     return value
   except ValueError:
@@ -394,7 +442,12 @@ def ask_compartments(default_specs: Optional[List[CompartmentSpec]]) -> List[Com
         continue
 
     count_default = default_spec.count if default_spec is not None else 1
-    count = ask_int(f"How many of {grid_w}x{grid_h}", count_default)
+    count = ask_int(f"How many of {grid_w}x{grid_h}", count_default, min_value=0)
+    if count == 0:
+      print(f"Skipping {grid_w}x{grid_h} (count=0).")
+      index += 1
+      continue
+
     specs.append(CompartmentSpec(index=index, grid_w=grid_w, grid_h=grid_h, count=count))
     index += 1
 
@@ -433,66 +486,143 @@ def build_layout(
   inner_wall: float,
   specs: List[CompartmentSpec]
 ) -> Tuple[List[Placement], Dict[int, int], int]:
-  occupied = [[False for _ in range(grid_cols)] for _ in range(grid_rows)]
+  def run_single_attempt(
+    queue: List[Tuple[int, int, int]],
+    y_order: List[int],
+    x_order: List[int],
+    prefer_rotated: bool
+  ) -> Tuple[List[Placement], Dict[int, int], int, List[List[bool]]]:
+    occupied = [[False for _ in range(grid_cols)] for _ in range(grid_rows)]
+    placements: List[Placement] = []
+    missing_by_spec: Dict[int, int] = {spec.index: 0 for spec in specs}
 
-  # Place larger compartments first to improve fit rate.
+    requested_counter = 1
+    for spec_index, grid_w, grid_h in queue:
+      placed = False
+      orientations: List[Tuple[int, int]] = [(grid_w, grid_h)]
+      if grid_w != grid_h:
+        orientations.append((grid_h, grid_w))
+      if prefer_rotated and len(orientations) == 2:
+        orientations = [orientations[1], orientations[0]]
+
+      for y in y_order:
+        for x in x_order:
+          for place_w, place_h in orientations:
+            if not can_place(occupied, x, y, place_w, place_h):
+              continue
+
+            fill_cells(occupied, x, y, place_w, place_h)
+            placements.append(
+              Placement(
+                label=f"C{requested_counter:02d}",
+                is_leftover=False,
+                requested_w_cells=grid_w,
+                requested_h_cells=grid_h,
+                x_cell=x,
+                y_cell=y,
+                w_cells=place_w,
+                h_cells=place_h,
+                x_mm=x * grid_size,
+                y_mm=y * grid_size,
+                w_mm=grid_to_mm_size(place_w, grid_size, inner_wall),
+                h_mm=grid_to_mm_size(place_h, grid_size, inner_wall)
+              )
+            )
+            requested_counter += 1
+            placed = True
+            break
+          if placed:
+            break
+        if placed:
+          break
+
+      if not placed:
+        missing_by_spec[spec_index] += 1
+
+    missing_total = sum(missing_by_spec.values())
+    return placements, missing_by_spec, missing_total, occupied
+
+  # Place larger compartments first, but evaluate many order variants.
   placement_queue: List[Tuple[int, int, int]] = []
   for spec in specs:
     for _ in range(spec.count):
       placement_queue.append((spec.index, spec.grid_w, spec.grid_h))
 
-  placement_queue.sort(key=lambda entry: (entry[1] * entry[2], max(entry[1], entry[2])), reverse=True)
+  queue_len = len(placement_queue)
+  if queue_len == 0:
+    return [], {spec.index: 0 for spec in specs}, 0
 
-  placements: List[Placement] = []
-  missing_by_spec: Dict[int, int] = {spec.index: 0 for spec in specs}
+  weighted_sum = sum((entry[0] * 31 + entry[1] * 17 + entry[2] * 13) for entry in placement_queue)
+  seed = (
+    grid_cols * 100003
+    + grid_rows * 1009
+    + int(round(grid_size * 1000.0)) * 97
+    + weighted_sum
+  )
+  rng = random.Random(seed)
 
-  requested_counter = 1
-  for spec_index, grid_w, grid_h in placement_queue:
-    placed = False
-    for y in range(grid_rows):
-      for x in range(grid_cols):
-        if not can_place(occupied, x, y, grid_w, grid_h):
-          continue
+  attempts = max(12, min(320, queue_len * 20))
+  best_placements: List[Placement] = []
+  best_missing_by_spec: Dict[int, int] = {spec.index: spec.count for spec in specs}
+  best_missing_total = queue_len
+  best_occupied = [[False for _ in range(grid_cols)] for _ in range(grid_rows)]
 
-        fill_cells(occupied, x, y, grid_w, grid_h)
-        placements.append(
-          Placement(
-            label=f"C{requested_counter:02d}",
-            is_leftover=False,
-            x_cell=x,
-            y_cell=y,
-            w_cells=grid_w,
-            h_cells=grid_h,
-            x_mm=x * grid_size,
-            y_mm=y * grid_size,
-            w_mm=grid_to_mm_size(grid_w, grid_size, inner_wall),
-            h_mm=grid_to_mm_size(grid_h, grid_size, inner_wall)
-          )
-        )
-        requested_counter += 1
-        placed = True
-        break
-      if placed:
-        break
+  base_y = list(range(grid_rows))
+  base_x = list(range(grid_cols))
 
-    if not placed:
-      missing_by_spec[spec_index] += 1
+  for attempt_index in range(attempts):
+    queue = placement_queue.copy()
+    rng.shuffle(queue)
+    queue.sort(
+      key=lambda entry: (
+        entry[1] * entry[2],
+        max(entry[1], entry[2]),
+        min(entry[1], entry[2]),
+        rng.random()
+      ),
+      reverse=True
+    )
 
-  missing_total = sum(missing_by_spec.values())
+    y_order = base_y if (attempt_index % 2 == 0) else list(reversed(base_y))
+    x_order = base_x if ((attempt_index // 2) % 2 == 0) else list(reversed(base_x))
+    prefer_rotated = ((attempt_index // 4) % 2 == 1)
+
+    placements, missing_by_spec, missing_total, occupied = run_single_attempt(
+      queue=queue,
+      y_order=y_order,
+      x_order=x_order,
+      prefer_rotated=prefer_rotated
+    )
+
+    placed_requested = len(placements)
+    best_placed_requested = len(best_placements)
+    if (
+      missing_total < best_missing_total
+      or (missing_total == best_missing_total and placed_requested > best_placed_requested)
+    ):
+      best_placements = placements
+      best_missing_by_spec = missing_by_spec
+      best_missing_total = missing_total
+      best_occupied = occupied
+
+    if best_missing_total == 0:
+      break
 
   # Fill leftover grid cells only when all requested compartments fit.
-  if missing_total == 0:
+  if best_missing_total == 0:
     leftover_counter = 1
     for y in range(grid_rows):
       for x in range(grid_cols):
-        if occupied[y][x]:
+        if best_occupied[y][x]:
           continue
 
-        occupied[y][x] = True
-        placements.append(
+        best_occupied[y][x] = True
+        best_placements.append(
           Placement(
             label=f"L{leftover_counter:02d}",
             is_leftover=True,
+            requested_w_cells=1,
+            requested_h_cells=1,
             x_cell=x,
             y_cell=y,
             w_cells=1,
@@ -505,7 +635,7 @@ def build_layout(
         )
         leftover_counter += 1
 
-  return placements, missing_by_spec, missing_total
+  return best_placements, best_missing_by_spec, best_missing_total
 
 
 PIXEL_FONT: Dict[str, List[str]] = {
@@ -519,8 +649,10 @@ PIXEL_FONT: Dict[str, List[str]] = {
   "7": ["111", "001", "001", "001", "001"],
   "8": ["111", "101", "111", "101", "111"],
   "9": ["111", "101", "111", "001", "111"],
+  ".": ["0", "0", "0", "0", "1"],
   "X": ["101", "101", "010", "101", "101"],
   "x": ["101", "101", "010", "101", "101"],
+  " ": ["0", "0", "0", "0", "0"],
   "C": ["111", "100", "100", "100", "111"],
   "L": ["100", "100", "100", "100", "111"]
 }
@@ -550,6 +682,22 @@ def build_compartment_label_boxes(
 ) -> Tuple[List[SolidBox], List[LabelGlyph]]:
   boxes: List[SolidBox] = []
   glyphs: List[LabelGlyph] = []
+
+  largest_label: Optional[str] = None
+  largest_area = -1.0
+  for placement in placements:
+    if placement.is_leftover:
+      continue
+    area = placement.w_mm * placement.h_mm
+    if area > largest_area:
+      largest_area = area
+      largest_label = placement.label
+
+  rounded_grid = round(grid_size, 1)
+  if abs(grid_size - round(grid_size)) <= 1e-9:
+    grid_size_text = f"{int(round(grid_size))}"
+  else:
+    grid_size_text = f"{rounded_grid:.1f}"
 
   def append_text_boxes(
     compartment_label: str,
@@ -595,12 +743,10 @@ def build_compartment_label_boxes(
 
   for placement in placements:
     primary_text = placement.label
-    width_mm = placement.w_cells * grid_size
-    height_mm = placement.h_cells * grid_size
-    width_text = f"{int(round(width_mm))}" if abs(width_mm - round(width_mm)) <= 1e-9 else f"{width_mm:g}"
-    height_text = f"{int(round(height_mm))}" if abs(height_mm - round(height_mm)) <= 1e-9 else f"{height_mm:g}"
-    secondary_text = f"{width_text}X{height_text}"
+    secondary_text = f"{placement.requested_w_cells} x {placement.requested_h_cells}"
     lines = [primary_text, secondary_text]
+    if largest_label is not None and placement.label == largest_label:
+      lines.append(grid_size_text)
 
     line_dimensions = [get_text_pixel_dimensions(line) for line in lines]
     if any(units_w <= 0 or units_h <= 0 for units_w, units_h in line_dimensions):
@@ -979,6 +1125,7 @@ def main() -> None:
   defaults = load_defaults(defaults_path)
 
   mode = ask_mode(defaults.mode)
+  defaults.mode = mode
 
   if mode == 1:
     grid_size = ask_float("Enter gridSize in mm", defaults.grid_size)
@@ -1043,6 +1190,7 @@ def main() -> None:
 
   specs = ask_compartments(defaults.compartments)
   if not specs:
+    save_defaults(defaults_path, defaults)
     print("No compartments entered. Stopping.")
     return
 
@@ -1090,6 +1238,7 @@ def main() -> None:
 
   output_data = {
     "project": project_name,
+    "mode": mode,
     "grid_size": grid_size,
     "outer_length": outer_length,
     "outer_width": outer_width,
@@ -1114,6 +1263,8 @@ def main() -> None:
       {
         "label": placement.label,
         "is_leftover": placement.is_leftover,
+        "requested_w_cells": placement.requested_w_cells,
+        "requested_h_cells": placement.requested_h_cells,
         "x_cell": placement.x_cell,
         "y_cell": placement.y_cell,
         "w_cells": placement.w_cells,
