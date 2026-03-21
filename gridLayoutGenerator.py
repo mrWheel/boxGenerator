@@ -337,8 +337,8 @@ def fill_cells(occupied: List[List[bool]], start_x: int, start_y: int, w: int, h
 
 
 def grid_to_mm_size(cell_count: int, grid_size: float, inner_wall: float) -> float:
-  return cell_count * grid_size - inner_wall
-
+  _ = inner_wall
+  return cell_count * grid_size
 
 def build_layout(
   grid_cols: int,
