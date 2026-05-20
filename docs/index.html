@@ -1,3 +1,866 @@
-<html>
-  boxGenerator
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Box Generator – User Documentation</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      font-size: 16px;
+      line-height: 1.65;
+      color: #1a1a2e;
+      background: #f5f7fa;
+    }
+
+    /* ── Layout ───────────────────────────────────── */
+    .wrapper {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      width: 260px;
+      flex-shrink: 0;
+      background: #ffffff;
+      border-right: 1px solid #dde3ea;
+      overflow-y: auto;
+      padding: 24px 0 24px 0;
+    }
+
+    nav .nav-title {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #6b7a99;
+      padding: 0 20px 8px;
+    }
+
+    nav ul {
+      list-style: none;
+    }
+
+    nav ul li a {
+      display: block;
+      padding: 6px 20px;
+      color: #344466;
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-left: 3px solid transparent;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    nav ul li a:hover,
+    nav ul li a.active {
+      background: #eef1f8;
+      border-left-color: #4a7dff;
+      color: #1a1a2e;
+    }
+
+    nav ul li.section-head a {
+      font-weight: 600;
+      color: #1a1a2e;
+    }
+
+    nav ul li.sub a {
+      padding-left: 36px;
+      font-size: 0.85rem;
+    }
+
+    main {
+      flex: 1;
+      max-width: 900px;
+      padding: 48px 48px 80px;
+    }
+
+    /* ── Typography ───────────────────────────────── */
+    h1 {
+      font-size: 2rem;
+      color: #1a1a2e;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      font-size: 1.05rem;
+      color: #6b7a99;
+      margin-bottom: 40px;
+    }
+
+    h2 {
+      font-size: 1.45rem;
+      color: #1a1a2e;
+      margin-top: 56px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #dde3ea;
+    }
+
+    h3 {
+      font-size: 1.1rem;
+      color: #2b3a5c;
+      margin-top: 28px;
+      margin-bottom: 8px;
+    }
+
+    p { margin-bottom: 14px; }
+
+    a { color: #4a7dff; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Code ─────────────────────────────────────── */
+    code {
+      font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+      font-size: 0.88em;
+      background: #eef1f8;
+      color: #2d3a6a;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    pre {
+      background: #f0f3fb;
+      border: 1px solid #d0d8ec;
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      margin: 16px 0 24px;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      font-size: 0.87em;
+      color: #1e2d5a;
+    }
+
+    /* ── Tables ───────────────────────────────────── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      font-size: 0.92rem;
+    }
+
+    thead tr {
+      background: #eef1f8;
+    }
+
+    th {
+      text-align: left;
+      padding: 9px 14px;
+      border: 1px solid #d0d8ec;
+      color: #2b3a5c;
+      font-weight: 600;
+    }
+
+    td {
+      padding: 8px 14px;
+      border: 1px solid #d0d8ec;
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) td { background: #f8f9fd; }
+
+    /* ── Lists ────────────────────────────────────── */
+    ul, ol {
+      margin: 0 0 16px 24px;
+    }
+
+    li { margin-bottom: 5px; }
+
+    /* ── Callout boxes ────────────────────────────── */
+    .callout {
+      border-left: 4px solid #4a7dff;
+      background: #eef5ff;
+      padding: 12px 16px;
+      border-radius: 0 6px 6px 0;
+      margin: 16px 0 24px;
+      font-size: 0.93rem;
+    }
+
+    .callout.tip   { border-color: #29b67a; background: #edfaf4; }
+    .callout.warn  { border-color: #f0a500; background: #fffae8; }
+    .callout.note  { border-color: #9b59b6; background: #f9f0ff; }
+
+    .callout strong { display: block; margin-bottom: 4px; font-size: 0.82rem;
+                      text-transform: uppercase; letter-spacing: 0.06em; }
+
+    .callout.tip  strong { color: #1a8a5a; }
+    .callout.warn strong { color: #b07500; }
+    .callout.note strong { color: #6f3d9e; }
+    .callout:not(.tip):not(.warn):not(.note) strong { color: #2a55cc; }
+
+    /* ── Step list ────────────────────────────────── */
+    .steps { list-style: none; margin-left: 0; counter-reset: step-counter; }
+    .steps li {
+      counter-increment: step-counter;
+      padding: 10px 14px 10px 52px;
+      position: relative;
+      margin-bottom: 10px;
+      background: #ffffff;
+      border: 1px solid #dde3ea;
+      border-radius: 8px;
+    }
+    .steps li::before {
+      content: counter(step-counter);
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #4a7dff;
+      color: #fff;
+      font-size: 0.8rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ── Images ───────────────────────────────────── */
+    .screenshot {
+      display: block;
+      max-width: 100%;
+      border: 1px solid #d0d8ec;
+      border-radius: 8px;
+      margin: 16px 0 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+
+    .img-caption {
+      font-size: 0.83rem;
+      color: #6b7a99;
+      margin-top: -18px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    /* ── Badge ────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      vertical-align: middle;
+    }
+    .badge.bg { background: #e8f0ff; color: #2a55cc; }
+    .badge.gl { background: #e8faf2; color: #1a8a5a; }
+
+    /* ── Responsive ───────────────────────────────── */
+    @media (max-width: 780px) {
+      nav { display: none; }
+      main { padding: 28px 20px 60px; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- ═══════ SIDEBAR NAVIGATION ═══════ -->
+  <nav>
+    <p class="nav-title">Box Generator Docs</p>
+    <ul>
+      <li class="section-head"><a href="#overview">Overview</a></li>
+      <li class="section-head"><a href="#requirements">Requirements</a></li>
+      <li class="section-head"><a href="#quick-start">Quick Start</a></li>
+      <li class="section-head"><a href="#box-generator">boxGenerator.py</a></li>
+      <li class="sub"><a href="#bg-projects">Projects</a></li>
+      <li class="sub"><a href="#bg-box-dims">Box dimensions</a></li>
+      <li class="sub"><a href="#bg-walls">Wall parameters</a></li>
+      <li class="sub"><a href="#bg-packing">Packing settings</a></li>
+      <li class="sub"><a href="#bg-compartments">Compartments</a></li>
+      <li class="sub"><a href="#bg-progress">Progress output</a></li>
+      <li class="sub"><a href="#bg-outputs">Output files</a></li>
+      <li class="section-head"><a href="#grid-layout">gridLayoutGenerator.py</a></li>
+      <li class="sub"><a href="#gl-mode">Layout modes</a></li>
+      <li class="sub"><a href="#gl-grid">Grid &amp; box size</a></li>
+      <li class="sub"><a href="#gl-walls">Wall parameters</a></li>
+      <li class="sub"><a href="#gl-compartments">Compartments</a></li>
+      <li class="sub"><a href="#gl-progress">Progress output</a></li>
+      <li class="sub"><a href="#gl-outputs">Output files</a></li>
+      <li class="section-head"><a href="#comparison">Choosing a tool</a></li>
+      <li class="section-head"><a href="#output-files">Working with outputs</a></li>
+      <li class="section-head"><a href="#troubleshooting">Troubleshooting</a></li>
+    </ul>
+  </nav>
+
+  <!-- ═══════ MAIN CONTENT ═══════ -->
+  <main>
+
+    <h1>Box Generator</h1>
+    <p class="subtitle">End-user documentation for <code>boxGenerator.py</code> and <code>gridLayoutGenerator.py</code></p>
+
+    <!-- ── OVERVIEW ──────────────────────────────── -->
+    <h2 id="overview">Overview</h2>
+    <p>
+      <strong>Box Generator</strong> is a set of two interactive Python command-line tools that create
+      fully customizable, 3D-printable storage boxes with automatically arranged interior compartments.
+      You describe the box size and the compartments you want; the program searches for the best
+      layout and generates ready-to-slice files.
+    </p>
+    <p>Both tools produce the same three types of output:</p>
+    <ul>
+      <li>An <strong>OpenSCAD</strong> (<code>.scad</code>) file — editable 3D source.</li>
+      <li>An <strong>STL</strong> (<code>.stl</code>) file — ready to open in any slicer.</li>
+      <li>A hidden <strong>project JSON</strong> file — saves your answers so the next run
+          can reuse all defaults.</li>
+    </ul>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Best for</th>
+          <th>Input style</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>boxGenerator.py</code> <span class="badge bg">BG</span></td>
+          <td>Flexible packing; compartments described in <strong>millimetres</strong></td>
+          <td>Physical sizes (mm), cluster groups, placement preferences</td>
+        </tr>
+        <tr>
+          <td><code>gridLayoutGenerator.py</code> <span class="badge gl">GL</span></td>
+          <td>Uniform grid; compartments described in <strong>grid cells</strong></td>
+          <td>Grid size (mm/cell), compartment sizes as NxM cells</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── REQUIREMENTS ──────────────────────────── -->
+    <h2 id="requirements">Requirements</h2>
+    <ul>
+      <li><strong>Python 3.8 or newer</strong> — no extra packages needed.</li>
+      <li><strong>OpenSCAD</strong> (optional) — to view or re-render the <code>.scad</code> file.</li>
+      <li><strong>Slicer software</strong> (optional, e.g. PrusaSlicer, Cura) — to print the
+          generated <code>.stl</code> file.</li>
+    </ul>
+    <div class="callout tip">
+      <strong>Tip</strong>
+      Run the scripts from the folder where you want the output files to be created.
+      The project JSON files are written to the same working directory.
+    </div>
+
+    <!-- ── QUICK START ────────────────────────────── -->
+    <h2 id="quick-start">Quick Start</h2>
+    <p>Open a terminal, change to the project folder and run one of:</p>
+
+    <pre><code>python3 boxGenerator.py
+python3 gridLayoutGenerator.py</code></pre>
+
+    <p>
+      On Linux/macOS the scripts are also directly executable after
+      <code>chmod +x boxGenerator.py</code>:
+    </p>
+    <pre><code>./boxGenerator.py
+./gridLayoutGenerator.py</code></pre>
+
+    <h3>Try the built-in example (boxGenerator)</h3>
+    <p>
+      An example project is included. When <code>boxGenerator.py</code> asks you to select a project,
+      choose <strong><code>_boxGeneratorTest</code></strong>.
+      Press <kbd>Enter</kbd> on every prompt to accept the defaults and watch the layout search run.
+    </p>
+    <img class="screenshot" src="../images/boxGeneratorTest.png"
+         alt="boxGeneratorTest example output" />
+    <p class="img-caption">Example: the <code>_boxGeneratorTest</code> project rendered in OpenSCAD</p>
+
+    <!-- ── BOX GENERATOR ─────────────────────────── -->
+    <h2 id="box-generator">boxGenerator.py <span class="badge bg">BG</span></h2>
+    <p>
+      This tool works in physical millimetres. You describe each group of compartments by its
+      cell size in mm, how many you want, and how they should be clustered together. The packing
+      algorithm tries many random arrangements to find the best fit.
+    </p>
+
+    <h3 id="bg-projects">Step 1 — Select or create a project</h3>
+    <p>
+      When you start the script, it lists any existing projects it finds
+      (<code>.boxGenerator.*.json</code> files in the current folder).
+    </p>
+    <pre><code>Select a project:
+  [1] myBox
+  [2] newProject</code></pre>
+    <p>
+      Enter the number of an existing project to reload its saved settings,
+      or choose the last option to type a new project name.
+      Your answers for this run are saved automatically so the next run shows them as defaults.
+    </p>
+    <div class="callout note">
+      <strong>Note</strong>
+      To reset all saved settings for a project, run the script with the
+      <code>--erase</code> flag:<br />
+      <code>python3 boxGenerator.py --erase</code>
+    </div>
+
+    <h3 id="bg-box-dims">Step 2 — Box dimensions</h3>
+    <p>Enter the <strong>outer</strong> size of the box as <code>length × width × height</code> in mm:</p>
+    <pre><code>Enter outer box size (length x width x height, example: 300x200x80) [304x204x80]:</code></pre>
+    <p>
+      Press <kbd>Enter</kbd> to keep the shown default, or type a new value such as <code>250x180x60</code>.
+      Decimals are accepted; use either <code>.</code> or <code>,</code> as the decimal separator.
+    </p>
+
+    <h3 id="bg-walls">Step 3 — Wall &amp; bottom parameters</h3>
+    <p>The script asks for four thickness values (all in mm):</p>
+    <table>
+      <thead>
+        <tr><th>Prompt</th><th>What it controls</th><th>Typical value</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Inner wall height</td>
+          <td>Height of the compartment dividers inside the box</td>
+          <td>Same as outer height or slightly less</td>
+        </tr>
+        <tr>
+          <td>Outer wall thickness</td>
+          <td>Thickness of the four outer walls</td>
+          <td>2 mm</td>
+        </tr>
+        <tr>
+          <td>Inner divider thickness</td>
+          <td>Thickness of the walls between compartments</td>
+          <td>2 mm</td>
+        </tr>
+        <tr>
+          <td>Bottom thickness</td>
+          <td>Thickness of the box floor</td>
+          <td>2 mm</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Step 4 — Optional leftover compartment</h3>
+    <p>
+      After packing all requested compartments, any remaining floor space can optionally be divided
+      into extra small compartments. Enter a size such as <code>20x20</code> to enable this, or
+      press <kbd>Enter</kbd> / type <code>-</code> to skip it.
+    </p>
+    <pre><code>Enter leftover compartment size (length x width, '-' = skip) [20x20]:</code></pre>
+
+    <h3 id="bg-packing">Step 5 — Packing settings</h3>
+    <table>
+      <thead>
+        <tr><th>Prompt</th><th>What it controls</th><th>Default</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Random seed</td>
+          <td>
+            Starting point for the random layout search. The same seed + same inputs always
+            produce the same result. Change the seed to try a different arrangement.
+          </td>
+          <td>12345</td>
+        </tr>
+        <tr>
+          <td>Number of layout attempts</td>
+          <td>
+            How many complete layout searches to run. Higher = more likely to find a good fit,
+            but takes longer.
+          </td>
+          <td>120</td>
+        </tr>
+        <tr>
+          <td>Attempts per cluster group</td>
+          <td>
+            How many candidate positions to evaluate for each group during one layout attempt.
+          </td>
+          <td>50</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="bg-compartments">Step 6 — Compartment definitions</h3>
+    <p>
+      This is the core of the tool. You define groups of compartments one by one.
+      Press <kbd>Enter</kbd> with no input (and no default exists) to finish entering compartments.
+    </p>
+    <pre><code>Enter compartment definitions.
+Example size: 25x30
+Cluster size means how many equal compartments must touch each other.
+Example: size 25x30, count 8, cluster 3 => groups of 3, 3, and 2
+Empty size reuses the default size and still shows the remaining questions.
+If no default exists yet, empty size finishes input.
+Use 'keep' to reuse a default compartment without editing.
+Use '0x0' to remove/skip a compartment and skip follow-up questions.</code></pre>
+
+    <p>For each compartment group, you provide:</p>
+    <ol>
+      <li>
+        <strong>Size</strong> — cell dimensions in mm as <code>length×width</code>,
+        for example <code>30x25</code>.
+        Type <code>keep</code> to reuse the entire saved definition without re-entering it.
+        Type <code>0x0</code> to remove a saved compartment from the project.
+      </li>
+      <li>
+        <strong>Count</strong> — total number of individual compartments of this size.
+      </li>
+      <li>
+        <strong>Cluster size</strong> — how many compartments of this size must be placed
+        touching each other in a row or column. For example, size&nbsp;30×25, count&nbsp;8,
+        cluster&nbsp;3 creates groups of 3 + 3 + 2.
+      </li>
+      <li>
+        <strong>Preferred placement</strong> — <code>random</code>, <code>front</code>, or
+        <code>back</code>. Controls which side of the box the packer prefers for this group.
+      </li>
+      <li>
+        <strong>Side preference</strong> (only for front/back) — <code>left</code>,
+        <code>right</code>, or <code>middle</code>.
+      </li>
+    </ol>
+    <div class="callout tip">
+      <strong>Tip</strong>
+      On subsequent runs, simply press <kbd>Enter</kbd> at each "size" prompt to keep
+      the saved default, then adjust only the values you want to change.
+      Type <code>keep</code> to accept all saved values for that compartment instantly.
+    </div>
+
+    <h3 id="bg-progress">Progress output</h3>
+    <p>During the layout search the tool prints a line like:</p>
+    <pre><code>Packing progress: attempt 40/120, best placed compartments 17/18, current missing compartments C04, C11</code></pre>
+    <ul>
+      <li><strong>attempt 40/120</strong> — currently on the 40th of 120 layout attempts.</li>
+      <li><strong>best placed 17/18</strong> — the best solution found so far placed 17 of the 18 requested compartment groups.</li>
+      <li><strong>current missing C04, C11</strong> — in this specific attempt, groups C04 and C11 have not been placed yet.</li>
+    </ul>
+    <p>The search stops early as soon as a perfect fit (all compartments placed) is found.</p>
+
+    <h3 id="bg-outputs">Output files</h3>
+    <p>After a successful run you will find three new files in the working directory:</p>
+    <table>
+      <thead>
+        <tr><th>File</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>{project}.scad</code></td>
+          <td>OpenSCAD source — open in OpenSCAD to inspect or re-export</td>
+        </tr>
+        <tr>
+          <td><code>{project}.stl</code></td>
+          <td>STL mesh — open directly in your slicer</td>
+        </tr>
+        <tr>
+          <td><code>.boxGenerator.{project}.json</code></td>
+          <td>Saved project settings (loaded as defaults on the next run)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── GRID LAYOUT GENERATOR ──────────────────── -->
+    <h2 id="grid-layout">gridLayoutGenerator.py <span class="badge gl">GL</span></h2>
+    <p>
+      This tool divides the box floor into a regular square grid. You specify compartment sizes
+      as multiples of grid cells (e.g. <code>2x3</code> means 2 columns × 3 rows of grid cells).
+      The actual millimetre dimensions are computed from the grid size you choose.
+    </p>
+
+    <h3>Step 1 — Select or create a project</h3>
+    <p>Works the same as for <code>boxGenerator.py</code> — saved settings are loaded from
+    <code>.gridLayout.{project}.json</code>.</p>
+
+    <h3 id="gl-mode">Step 2 — Layout mode</h3>
+    <p>Choose how you want to specify the box floor dimensions:</p>
+    <pre><code>Layout mode:
+  [1] Fixed grid        (enter gridSize, then box dimensions)
+  [2] Fixed box Length  (suggest gridSize and box Width)
+  [3] Fixed box Width   (suggest gridSize and box Length)</code></pre>
+
+    <table>
+      <thead>
+        <tr><th>Mode</th><th>When to use</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>1 — Fixed grid</strong></td>
+          <td>
+            You already know the grid cell size in mm. Enter it, then enter the full outer box size.
+            The outer dimensions must be exact multiples of the grid size.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>2 — Fixed box Length</strong></td>
+          <td>
+            You know the box length (e.g. it must fit a specific drawer). The tool suggests
+            grid sizes that divide the length evenly and then suggests matching widths.
+          </td>
+        </tr>
+        <tr>
+          <td><strong>3 — Fixed box Width</strong></td>
+          <td>
+            Same as mode 2 but you fix the width instead of the length.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <img class="screenshot" src="../images/gridsLayoutGeneratorMode1.png"
+         alt="gridLayoutGenerator mode 1 — fixed grid" />
+    <p class="img-caption">Mode 1 — Fixed grid size; you enter gridSize then full LxWxH.</p>
+
+    <img class="screenshot" src="../images/gridLayoutGeneratorMode2.png"
+         alt="gridLayoutGenerator mode 2 — fixed length" />
+    <p class="img-caption">Mode 2 — Fix the box length; the tool suggests valid grid sizes and widths.</p>
+
+    <img class="screenshot" src="../images/gridLayoutGeneratorMode3.png"
+         alt="gridLayoutGenerator mode 3 — fixed width" />
+    <p class="img-caption">Mode 3 — Fix the box width; the tool suggests valid grid sizes and lengths.</p>
+
+    <h3>Step 3 — Packing settings</h3>
+    <p>Same prompts as <code>boxGenerator.py</code>: random seed, layout attempts,
+    and attempts per cluster group.</p>
+
+    <h3 id="gl-grid">Step 4 — Grid &amp; box size</h3>
+    <p>
+      Depending on the mode chosen above, the tool guides you through selecting or confirming:
+    </p>
+    <ul>
+      <li><strong>Grid size</strong> — size of one grid cell in mm (e.g. <code>25</code>).</li>
+      <li><strong>Outer box length and width</strong> — must be exact multiples of the grid size.</li>
+      <li><strong>Outer box height</strong> — total outer height in mm.</li>
+    </ul>
+    <div class="callout tip">
+      <strong>Tip (modes 2 &amp; 3)</strong>
+      When the tool prints a list of valid grid sizes or suggested outer dimensions, enter the
+      number shown in brackets (e.g. <code>[3]</code>) to select that option.
+    </div>
+
+    <h3 id="gl-walls">Step 5 — Wall parameters</h3>
+    <table>
+      <thead>
+        <tr><th>Prompt</th><th>What it controls</th><th>Typical value</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Outer wall thickness (outerWall)</td>
+          <td>Thickness of the four outer walls</td>
+          <td>1.4 mm</td>
+        </tr>
+        <tr>
+          <td>Inner wall thickness (innerWall)</td>
+          <td>Thickness of the dividers between compartments</td>
+          <td>1.0 mm</td>
+        </tr>
+        <tr>
+          <td>Bottom thickness</td>
+          <td>Thickness of the box floor</td>
+          <td>1.4 mm</td>
+        </tr>
+        <tr>
+          <td>Inner wall height</td>
+          <td>Height of the compartment dividers</td>
+          <td>Outer height − bottom thickness</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="gl-compartments">Step 6 — Compartment definitions</h3>
+    <pre><code>Enter compartment requirements.
+Use format NxM (examples: 1x1, 1x2, 2x6, 3x4)
+Empty size reuses the default size and still asks for count.
+If no default exists yet, empty size finishes input.</code></pre>
+
+    <p>For each compartment type, enter:</p>
+    <ol>
+      <li>
+        <strong>Size in grid cells</strong> — as <code>NxM</code>, e.g. <code>2x3</code> means
+        2 columns × 3 rows of grid cells. The tool may rotate it to <code>3x2</code> if that
+        helps the layout fit better.
+      </li>
+      <li>
+        <strong>Count</strong> — how many compartments of this size you want.
+        Enter <code>0</code> to skip a saved compartment type without removing it from the project.
+      </li>
+    </ol>
+    <p>
+      Repeat until all compartment types are entered, then press <kbd>Enter</kbd> with an empty
+      size field to finish.
+    </p>
+    <div class="callout note">
+      <strong>Leftovers</strong>
+      If all requested compartments fit, any remaining grid cells are automatically filled with
+      <code>1×1</code> leftover compartments. These appear with labels starting with
+      <strong>L</strong> (e.g. <code>L01</code>).
+    </div>
+
+    <h3 id="gl-progress">Progress output</h3>
+    <p>The progress line looks like:</p>
+    <pre><code>Packing progress: attempt 24/100, best placed compartments 14/15, current missing compartments spec 04 x1</code></pre>
+    <ul>
+      <li><strong>attempt 24/100</strong> — currently on attempt 24 of 100.</li>
+      <li><strong>best placed 14/15</strong> — best result so far placed 14 of the 15 requested compartments.</li>
+      <li><strong>current missing spec 04 x1</strong> — in this attempt, one compartment of specification 4 is still unplaced.</li>
+    </ul>
+
+    <h3 id="gl-outputs">Output files</h3>
+    <table>
+      <thead>
+        <tr><th>File</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>{project}.scad</code></td>
+          <td>OpenSCAD source</td>
+        </tr>
+        <tr>
+          <td><code>{project}.stl</code></td>
+          <td>STL mesh for slicing</td>
+        </tr>
+        <tr>
+          <td><code>.gridLayout.{project}.json</code></td>
+          <td>Saved project settings, grid layout, and full placement data</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── COMPARISON ─────────────────────────────── -->
+    <h2 id="comparison">Choosing the right tool</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Question</th>
+          <th>Use <code>boxGenerator.py</code></th>
+          <th>Use <code>gridLayoutGenerator.py</code></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Do you know the exact mm size of your items?</td>
+          <td>✔ Yes — enter sizes directly in mm</td>
+          <td>— Less direct</td>
+        </tr>
+        <tr>
+          <td>Do you want a regular, uniform grid?</td>
+          <td>— No guarantee</td>
+          <td>✔ Yes — grid is always uniform</td>
+        </tr>
+        <tr>
+          <td>Do compartments need to be exactly as requested?</td>
+          <td>⚠ May shrink slightly to improve fit</td>
+          <td>✔ Never distorted (only rotated)</td>
+        </tr>
+        <tr>
+          <td>Do you want compartments grouped side-by-side?</td>
+          <td>✔ Cluster size controls this</td>
+          <td>— Not available</td>
+        </tr>
+        <tr>
+          <td>Should the box fit a specific drawer/shelf?</td>
+          <td>Enter exact outer size</td>
+          <td>✔ Modes 2 &amp; 3 suggest valid sizes</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ── OUTPUT FILES ────────────────────────────── -->
+    <h2 id="output-files">Working with the output files</h2>
+
+    <h3>Viewing the .scad file in OpenSCAD</h3>
+    <ol class="steps">
+      <li>Install <a href="https://openscad.org/downloads.html" target="_blank">OpenSCAD</a>.</li>
+      <li>Open the <code>.scad</code> file via <strong>File → Open</strong>.</li>
+      <li>Press <kbd>F5</kbd> to preview, or <kbd>F6</kbd> to render the full geometry.</li>
+      <li>Optionally export a higher-quality STL via <strong>File → Export → Export as STL</strong>.</li>
+    </ol>
+
+    <h3>Slicing and 3D printing</h3>
+    <ol class="steps">
+      <li>Open your slicer (PrusaSlicer, Cura, Bambu Studio, …).</li>
+      <li>Import the <code>.stl</code> file.</li>
+      <li>Choose your material and layer height (0.2 mm layer height works well for most boxes).</li>
+      <li>Slice and transfer to your printer.</li>
+    </ol>
+    <div class="callout tip">
+      <strong>Tip</strong>
+      The Python-generated STL is fully functional, but for best print quality open the
+      <code>.scad</code> file in OpenSCAD and export the STL from there
+      (<kbd>F6</kbd> then <strong>Export as STL</strong>).
+    </div>
+
+    <h3>Re-running a project</h3>
+    <p>
+      Start the same script again and select the same project name.
+      All your previous answers appear as defaults in brackets — press <kbd>Enter</kbd>
+      at each prompt to reuse them unchanged, or type a new value to override only that setting.
+    </p>
+    <p>
+      To reproduce the exact same layout, keep the <strong>random seed</strong> unchanged.
+      To explore different arrangements without changing the box or compartment sizes,
+      change only the seed.
+    </p>
+
+    <!-- ── TROUBLESHOOTING ─────────────────────────── -->
+    <h2 id="troubleshooting">Troubleshooting</h2>
+
+    <h3>Some compartments do not fit</h3>
+    <p>The progress output shows something like <em>"best placed 14/15"</em> and the run ends
+    without producing a file. Try one or more of:</p>
+    <ul>
+      <li>Increase the <strong>box size</strong>.</li>
+      <li>Reduce the <strong>count</strong> of one or more compartment types.</li>
+      <li>Increase <strong>layout attempts</strong> (e.g. from 120 to 300).</li>
+      <li>Increase <strong>attempts per cluster group</strong> (e.g. from 50 to 100).</li>
+      <li>Try a different <strong>random seed</strong>.</li>
+    </ul>
+    <div class="callout note">
+      <strong>Note (boxGenerator.py)</strong>
+      When compartments cannot all be placed, the tool prints suggestions such as
+      "Compartment 3 (30×25): max 4 times" — these are the minimum changes needed to make the
+      layout work.
+    </div>
+
+    <h3>The layout changes when I re-run</h3>
+    <p>
+      Confirm that the <strong>random seed</strong> is the same as before.
+      Also check that none of the compartment counts or box dimensions have changed.
+      The same seed + same inputs always produce the same layout.
+    </p>
+
+    <h3>boxGenerator.py changed a compartment size</h3>
+    <p>
+      <code>boxGenerator.py</code> may shrink a compartment by up to 10 % to improve the overall fit.
+      The <code>.scad</code> file comments and the compartment labels show both the requested and
+      the actual sizes. If exact sizes are critical, use <code>gridLayoutGenerator.py</code> instead
+      (it never distorts sizes) or increase the box dimensions slightly.
+    </p>
+
+    <h3>gridLayoutGenerator: "outer dimensions must be a multiple of gridSize"</h3>
+    <p>
+      In mode 1 you must enter outer length and width values that are each an exact multiple of
+      the grid size. For example, with grid size 25 mm the valid outer lengths include 100, 125,
+      150, 175, … mm. Use modes 2 or 3 to let the tool suggest valid combinations automatically.
+    </p>
+
+    <h3>OpenSCAD vs STL look different</h3>
+    <p>
+      The <code>.scad</code> file is the authoritative source. Small visual differences can appear
+      because the Python STL writer uses simpler triangulation. For final print quality, render the
+      STL from OpenSCAD directly.
+    </p>
+
+    <h3>Erasing saved project settings</h3>
+    <p>Run with <code>--erase</code> or <code>--empty</code> to delete the stored defaults for the
+    selected project before the run starts:</p>
+    <pre><code>python3 boxGenerator.py --erase
+python3 gridLayoutGenerator.py --erase</code></pre>
+    <p>Alternatively, simply delete (or rename) the hidden JSON file:
+    <code>.boxGenerator.{project}.json</code> or <code>.gridLayout.{project}.json</code>.</p>
+
+  </main>
+</div>
+</body>
 </html>
+
